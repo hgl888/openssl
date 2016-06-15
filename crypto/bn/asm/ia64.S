@@ -3,6 +3,13 @@
 .ident	"ia64.S, Version 2.1"
 .ident	"IA-64 ISA artwork by Andy Polyakov <appro@fy.chalmers.se>"
 
+// Copyright 2001-2016 The OpenSSL Project Authors. All Rights Reserved.
+//
+// Licensed under the OpenSSL license (the "License").  You may not use
+// this file except in compliance with the License.  You can obtain a copy
+// in the file LICENSE in the source distribution or at
+// https://www.openssl.org/source/license.html
+
 //
 // ====================================================================
 // Written by Andy Polyakov <appro@fy.chalmers.se> for the OpenSSL
@@ -495,7 +502,7 @@ bn_sqr_words:
 // scalability. The decision will very likely be reconsidered after the
 // benchmark program is profiled. I.e. if perfomance gain on Itanium
 // will appear larger than loss on "wider" IA-64, then the loop should
-// be explicitely split and the epilogue compressed.
+// be explicitly split and the epilogue compressed.
 .L_bn_sqr_words_ctop:
 { .mfi;	(p16)	ldf8		f32=[r33],8
 	(p25)	xmpy.lu		f42=f41,f41

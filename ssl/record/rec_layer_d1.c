@@ -1,116 +1,10 @@
-/* ssl/record/rec_layer_d1.c */
 /*
- * DTLS implementation written by Nagendra Modadugu
- * (nagendra@cs.stanford.edu) for the OpenSSL project 2005.
- */
-/* ====================================================================
- * Copyright (c) 1998-2005 The OpenSSL Project.  All rights reserved.
+ * Copyright 2005-2016 The OpenSSL Project Authors. All Rights Reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- *
- * 1. Redistributions of source code must retain the above copyright
- *    notice, this list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright
- *    notice, this list of conditions and the following disclaimer in
- *    the documentation and/or other materials provided with the
- *    distribution.
- *
- * 3. All advertising materials mentioning features or use of this
- *    software must display the following acknowledgment:
- *    "This product includes software developed by the OpenSSL Project
- *    for use in the OpenSSL Toolkit. (http://www.openssl.org/)"
- *
- * 4. The names "OpenSSL Toolkit" and "OpenSSL Project" must not be used to
- *    endorse or promote products derived from this software without
- *    prior written permission. For written permission, please contact
- *    openssl-core@openssl.org.
- *
- * 5. Products derived from this software may not be called "OpenSSL"
- *    nor may "OpenSSL" appear in their names without prior written
- *    permission of the OpenSSL Project.
- *
- * 6. Redistributions of any form whatsoever must retain the following
- *    acknowledgment:
- *    "This product includes software developed by the OpenSSL Project
- *    for use in the OpenSSL Toolkit (http://www.openssl.org/)"
- *
- * THIS SOFTWARE IS PROVIDED BY THE OpenSSL PROJECT ``AS IS'' AND ANY
- * EXPRESSED OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
- * PURPOSE ARE DISCLAIMED.  IN NO EVENT SHALL THE OpenSSL PROJECT OR
- * ITS CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT
- * NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
- * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
- * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,
- * STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED
- * OF THE POSSIBILITY OF SUCH DAMAGE.
- * ====================================================================
- *
- * This product includes cryptographic software written by Eric Young
- * (eay@cryptsoft.com).  This product includes software written by Tim
- * Hudson (tjh@cryptsoft.com).
- *
- */
-/* Copyright (C) 1995-1998 Eric Young (eay@cryptsoft.com)
- * All rights reserved.
- *
- * This package is an SSL implementation written
- * by Eric Young (eay@cryptsoft.com).
- * The implementation was written so as to conform with Netscapes SSL.
- *
- * This library is free for commercial and non-commercial use as long as
- * the following conditions are aheared to.  The following conditions
- * apply to all code found in this distribution, be it the RC4, RSA,
- * lhash, DES, etc., code; not just the SSL code.  The SSL documentation
- * included with this distribution is covered by the same copyright terms
- * except that the holder is Tim Hudson (tjh@cryptsoft.com).
- *
- * Copyright remains Eric Young's, and as such any Copyright notices in
- * the code are not to be removed.
- * If this package is used in a product, Eric Young should be given attribution
- * as the author of the parts of the library used.
- * This can be in the form of a textual message at program startup or
- * in documentation (online or textual) provided with the package.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- * 1. Redistributions of source code must retain the copyright
- *    notice, this list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright
- *    notice, this list of conditions and the following disclaimer in the
- *    documentation and/or other materials provided with the distribution.
- * 3. All advertising materials mentioning features or use of this software
- *    must display the following acknowledgement:
- *    "This product includes cryptographic software written by
- *     Eric Young (eay@cryptsoft.com)"
- *    The word 'cryptographic' can be left out if the rouines from the library
- *    being used are not cryptographic related :-).
- * 4. If you include any Windows specific code (or a derivative thereof) from
- *    the apps directory (application code) you must include an acknowledgement:
- *    "This product includes software written by Tim Hudson (tjh@cryptsoft.com)"
- *
- * THIS SOFTWARE IS PROVIDED BY ERIC YOUNG ``AS IS'' AND
- * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
- * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
- * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
- * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
- * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
- * SUCH DAMAGE.
- *
- * The licence and distribution terms for any publically available version or
- * derivative of this code cannot be changed.  i.e. this code cannot simply be
- * copied and put under another distribution licence
- * [including the GNU Public Licence.]
+ * Licensed under the OpenSSL license (the "License").  You may not use
+ * this file except in compliance with the License.  You can obtain a copy
+ * in the file LICENSE in the source distribution or at
+ * https://www.openssl.org/source/license.html
  */
 
 #include <stdio.h>
@@ -119,7 +13,6 @@
 #include "../ssl_locl.h"
 #include <openssl/evp.h>
 #include <openssl/buffer.h>
-#include <openssl/pqueue.h>
 #include <openssl/rand.h>
 #include "record_locl.h"
 
@@ -165,9 +58,9 @@ void DTLS_RECORD_LAYER_clear(RECORD_LAYER *rl)
     DTLS_RECORD_LAYER *d;
     pitem *item = NULL;
     DTLS1_RECORD_DATA *rdata;
-    pqueue unprocessed_rcds;
-    pqueue processed_rcds;
-    pqueue buffered_app_data;
+    pqueue *unprocessed_rcds;
+    pqueue *processed_rcds;
+    pqueue *buffered_app_data;
 
     d = rl->d;
     
@@ -233,7 +126,7 @@ void DTLS_RECORD_LAYER_set_write_sequence(RECORD_LAYER *rl, unsigned char *seq)
 }
 
 static int have_handshake_fragment(SSL *s, int type, unsigned char *buf,
-                                   int len, int peek);
+                                   int len);
 
 /* copy buffered record into SSL structure */
 static int dtls1_copy_record(SSL *s, pitem *item)
@@ -357,7 +250,7 @@ int dtls1_process_buffered_records(SSL *s)
             if (!dtls1_process_record(s))
                 return (0);
             if (dtls1_buffer_record(s, &(s->rlayer.d->processed_rcds),
-                SSL3_RECORD_get_seq_num(&s->rlayer.rrec)) < 0)
+                SSL3_RECORD_get_seq_num(s->rlayer.rrec)) < 0)
                 return -1;
         }
     }
@@ -426,7 +319,7 @@ int dtls1_read_bytes(SSL *s, int type, int *recvd_type, unsigned char *buf,
     /*
      * check whether there's a handshake message (client hello?) waiting
      */
-    if ((ret = have_handshake_fragment(s, type, buf, len, peek)))
+    if ((ret = have_handshake_fragment(s, type, buf, len)))
         return ret;
 
     /*
@@ -466,7 +359,7 @@ int dtls1_read_bytes(SSL *s, int type, int *recvd_type, unsigned char *buf,
      * s->s3->rrec.off,     - offset into 'data' for next read
      * s->s3->rrec.length,  - number of bytes.
      */
-    rr = &s->rlayer.rrec;
+    rr = s->rlayer.rrec;
 
     /*
      * We are not handshaking and have no data yet, so process data buffered
@@ -571,7 +464,7 @@ int dtls1_read_bytes(SSL *s, int type, int *recvd_type, unsigned char *buf,
 
         memcpy(buf, &(SSL3_RECORD_get_data(rr)[SSL3_RECORD_get_off(rr)]), n);
         if (!peek) {
-            SSL3_RECORD_add_length(rr, -n);
+            SSL3_RECORD_sub_length(rr, n);
             SSL3_RECORD_add_off(rr, n);
             if (SSL3_RECORD_get_length(rr) == 0) {
                 s->rlayer.rstate = SSL_ST_READ_HEADER;
@@ -630,7 +523,7 @@ int dtls1_read_bytes(SSL *s, int type, int *recvd_type, unsigned char *buf,
             dest_len = &s->rlayer.d->alert_fragment_len;
         }
 #ifndef OPENSSL_NO_HEARTBEATS
-        else if (SSL3_RECORD_get_type(rr) == TLS1_RT_HEARTBEAT) {
+        else if (SSL3_RECORD_get_type(rr) == DTLS1_RT_HEARTBEAT) {
             /* We allow a 0 return */
             if (dtls1_process_heartbeat(s, SSL3_RECORD_get_data(rr),
                     SSL3_RECORD_get_length(rr)) < 0) {
@@ -668,7 +561,7 @@ int dtls1_read_bytes(SSL *s, int type, int *recvd_type, unsigned char *buf,
 
         if (dest_maxlen > 0) {
             /*
-             * XDTLS: In a pathalogical case, the Client Hello may be
+             * XDTLS: In a pathological case, the Client Hello may be
              * fragmented--don't always expect dest_maxlen bytes
              */
             if (SSL3_RECORD_get_length(rr)  < dest_maxlen) {
@@ -847,7 +740,7 @@ int dtls1_read_bytes(SSL *s, int type, int *recvd_type, unsigned char *buf,
             BIO_snprintf(tmp, sizeof tmp, "%d", alert_descr);
             ERR_add_error_data(2, "SSL alert number ", tmp);
             s->shutdown |= SSL_RECEIVED_SHUTDOWN;
-            SSL_CTX_remove_session(s->ctx, s->session);
+            SSL_CTX_remove_session(s->session_ctx, s->session);
             return (0);
         } else {
             al = SSL_AD_ILLEGAL_PARAMETER;
@@ -988,7 +881,7 @@ int dtls1_read_bytes(SSL *s, int type, int *recvd_type, unsigned char *buf,
          * is started.
          */
 static int have_handshake_fragment(SSL *s, int type, unsigned char *buf,
-                                   int len, int peek)
+                                   int len)
 {
 
     if ((type == SSL3_RT_HANDSHAKE)
@@ -1037,11 +930,11 @@ int do_dtls1_write(SSL *s, int type, const unsigned char *buf,
     int i, mac_size, clear = 0;
     int prefix_len = 0;
     int eivlen;
-    SSL3_RECORD *wr;
+    SSL3_RECORD wr;
     SSL3_BUFFER *wb;
     SSL_SESSION *sess;
 
-    wb = &s->rlayer.wbuf;
+    wb = &s->rlayer.wbuf[0];
 
     /*
      * first check if there is a SSL3_BUFFER still being written out.  This
@@ -1063,7 +956,6 @@ int do_dtls1_write(SSL *s, int type, const unsigned char *buf,
     if (len == 0 && !create_empty_fragment)
         return 0;
 
-    wr = &s->rlayer.wrec;
     sess = s->session;
 
     if ((sess == NULL) ||
@@ -1083,7 +975,7 @@ int do_dtls1_write(SSL *s, int type, const unsigned char *buf,
     /* write the header */
 
     *(p++) = type & 0xff;
-    SSL3_RECORD_set_type(wr, type);
+    SSL3_RECORD_set_type(&wr, type);
     /*
      * Special case: for hello verify request, client version 1.0 and we
      * haven't decided which version to use yet send back using version 1.0
@@ -1120,47 +1012,47 @@ int do_dtls1_write(SSL *s, int type, const unsigned char *buf,
         eivlen = 0;
 
     /* lets setup the record stuff. */
-    SSL3_RECORD_set_data(wr, p + eivlen); /* make room for IV in case of CBC */
-    SSL3_RECORD_set_length(wr, (int)len);
-    SSL3_RECORD_set_input(wr, (unsigned char *)buf);
+    SSL3_RECORD_set_data(&wr, p + eivlen); /* make room for IV in case of CBC */
+    SSL3_RECORD_set_length(&wr, (int)len);
+    SSL3_RECORD_set_input(&wr, (unsigned char *)buf);
 
     /*
-     * we now 'read' from wr->input, wr->length bytes into wr->data
+     * we now 'read' from wr.input, wr.length bytes into wr.data
      */
 
     /* first we compress */
     if (s->compress != NULL) {
-        if (!ssl3_do_compress(s)) {
+        if (!ssl3_do_compress(s, &wr)) {
             SSLerr(SSL_F_DO_DTLS1_WRITE, SSL_R_COMPRESSION_FAILURE);
             goto err;
         }
     } else {
-        memcpy(SSL3_RECORD_get_data(wr), SSL3_RECORD_get_input(wr),
-               SSL3_RECORD_get_length(wr));
-        SSL3_RECORD_reset_input(wr);
+        memcpy(SSL3_RECORD_get_data(&wr), SSL3_RECORD_get_input(&wr),
+               SSL3_RECORD_get_length(&wr));
+        SSL3_RECORD_reset_input(&wr);
     }
 
     /*
-     * we should still have the output to wr->data and the input from
-     * wr->input.  Length should be wr->length. wr->data still points in the
+     * we should still have the output to wr.data and the input from
+     * wr.input.  Length should be wr.length. wr.data still points in the
      * wb->buf
      */
 
     if (mac_size != 0) {
-        if (s->method->ssl3_enc->mac(s,
-                &(p[SSL3_RECORD_get_length(wr) + eivlen]), 1) < 0)
+        if (s->method->ssl3_enc->mac(s, &wr,
+                &(p[SSL3_RECORD_get_length(&wr) + eivlen]), 1) < 0)
             goto err;
-        SSL3_RECORD_add_length(wr, mac_size);
+        SSL3_RECORD_add_length(&wr, mac_size);
     }
 
     /* this is true regardless of mac size */
-    SSL3_RECORD_set_data(wr, p);
-    SSL3_RECORD_reset_input(wr);
+    SSL3_RECORD_set_data(&wr, p);
+    SSL3_RECORD_reset_input(&wr);
 
     if (eivlen)
-        SSL3_RECORD_add_length(wr, eivlen);
+        SSL3_RECORD_add_length(&wr, eivlen);
 
-    if (s->method->ssl3_enc->enc(s, 1) < 1)
+    if (s->method->ssl3_enc->enc(s, &wr, 1, 1) < 1)
         goto err;
 
     /* record length after mac and block padding */
@@ -1180,18 +1072,18 @@ int do_dtls1_write(SSL *s, int type, const unsigned char *buf,
 
     memcpy(pseq, &(s->rlayer.write_sequence[2]), 6);
     pseq += 6;
-    s2n(SSL3_RECORD_get_length(wr), pseq);
+    s2n(SSL3_RECORD_get_length(&wr), pseq);
 
     if (s->msg_callback)
         s->msg_callback(1, 0, SSL3_RT_HEADER, pseq - DTLS1_RT_HEADER_LENGTH,
                         DTLS1_RT_HEADER_LENGTH, s, s->msg_callback_arg);
 
     /*
-     * we should now have wr->data pointing to the encrypted data, which is
+     * we should now have wr.data pointing to the encrypted data, which is
      * wr->length long
      */
-    SSL3_RECORD_set_type(wr, type); /* not needed but helps for debugging */
-    SSL3_RECORD_add_length(wr, DTLS1_RT_HEADER_LENGTH);
+    SSL3_RECORD_set_type(&wr, type); /* not needed but helps for debugging */
+    SSL3_RECORD_add_length(&wr, DTLS1_RT_HEADER_LENGTH);
 
     ssl3_record_sequence_update(&(s->rlayer.write_sequence[0]));
 
@@ -1200,11 +1092,11 @@ int do_dtls1_write(SSL *s, int type, const unsigned char *buf,
          * we are in a recursive call; just return the length, don't write
          * out anything here
          */
-        return wr->length;
+        return wr.length;
     }
 
     /* now let's set up wb */
-    SSL3_BUFFER_set_left(wb, prefix_len + SSL3_RECORD_get_length(wr));
+    SSL3_BUFFER_set_left(wb, prefix_len + SSL3_RECORD_get_length(&wr));
     SSL3_BUFFER_set_offset(wb, 0);
 
     /*

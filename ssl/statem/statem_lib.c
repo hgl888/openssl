@@ -1,113 +1,12 @@
-/* ssl/statem/statem_lib.c */
-/* Copyright (C) 1995-1998 Eric Young (eay@cryptsoft.com)
- * All rights reserved.
+/*
+ * Copyright 1995-2016 The OpenSSL Project Authors. All Rights Reserved.
  *
- * This package is an SSL implementation written
- * by Eric Young (eay@cryptsoft.com).
- * The implementation was written so as to conform with Netscapes SSL.
- *
- * This library is free for commercial and non-commercial use as long as
- * the following conditions are aheared to.  The following conditions
- * apply to all code found in this distribution, be it the RC4, RSA,
- * lhash, DES, etc., code; not just the SSL code.  The SSL documentation
- * included with this distribution is covered by the same copyright terms
- * except that the holder is Tim Hudson (tjh@cryptsoft.com).
- *
- * Copyright remains Eric Young's, and as such any Copyright notices in
- * the code are not to be removed.
- * If this package is used in a product, Eric Young should be given attribution
- * as the author of the parts of the library used.
- * This can be in the form of a textual message at program startup or
- * in documentation (online or textual) provided with the package.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- * 1. Redistributions of source code must retain the copyright
- *    notice, this list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright
- *    notice, this list of conditions and the following disclaimer in the
- *    documentation and/or other materials provided with the distribution.
- * 3. All advertising materials mentioning features or use of this software
- *    must display the following acknowledgement:
- *    "This product includes cryptographic software written by
- *     Eric Young (eay@cryptsoft.com)"
- *    The word 'cryptographic' can be left out if the rouines from the library
- *    being used are not cryptographic related :-).
- * 4. If you include any Windows specific code (or a derivative thereof) from
- *    the apps directory (application code) you must include an acknowledgement:
- *    "This product includes software written by Tim Hudson (tjh@cryptsoft.com)"
- *
- * THIS SOFTWARE IS PROVIDED BY ERIC YOUNG ``AS IS'' AND
- * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
- * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
- * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
- * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
- * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
- * SUCH DAMAGE.
- *
- * The licence and distribution terms for any publically available version or
- * derivative of this code cannot be changed.  i.e. this code cannot simply be
- * copied and put under another distribution licence
- * [including the GNU Public Licence.]
+ * Licensed under the OpenSSL license (the "License").  You may not use
+ * this file except in compliance with the License.  You can obtain a copy
+ * in the file LICENSE in the source distribution or at
+ * https://www.openssl.org/source/license.html
  */
-/* ====================================================================
- * Copyright (c) 1998-2002 The OpenSSL Project.  All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- *
- * 1. Redistributions of source code must retain the above copyright
- *    notice, this list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright
- *    notice, this list of conditions and the following disclaimer in
- *    the documentation and/or other materials provided with the
- *    distribution.
- *
- * 3. All advertising materials mentioning features or use of this
- *    software must display the following acknowledgment:
- *    "This product includes software developed by the OpenSSL Project
- *    for use in the OpenSSL Toolkit. (http://www.openssl.org/)"
- *
- * 4. The names "OpenSSL Toolkit" and "OpenSSL Project" must not be used to
- *    endorse or promote products derived from this software without
- *    prior written permission. For written permission, please contact
- *    openssl-core@openssl.org.
- *
- * 5. Products derived from this software may not be called "OpenSSL"
- *    nor may "OpenSSL" appear in their names without prior written
- *    permission of the OpenSSL Project.
- *
- * 6. Redistributions of any form whatsoever must retain the following
- *    acknowledgment:
- *    "This product includes software developed by the OpenSSL Project
- *    for use in the OpenSSL Toolkit (http://www.openssl.org/)"
- *
- * THIS SOFTWARE IS PROVIDED BY THE OpenSSL PROJECT ``AS IS'' AND ANY
- * EXPRESSED OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
- * PURPOSE ARE DISCLAIMED.  IN NO EVENT SHALL THE OpenSSL PROJECT OR
- * ITS CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT
- * NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
- * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
- * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,
- * STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED
- * OF THE POSSIBILITY OF SUCH DAMAGE.
- * ====================================================================
- *
- * This product includes cryptographic software written by Eric Young
- * (eay@cryptsoft.com).  This product includes software written by Tim
- * Hudson (tjh@cryptsoft.com).
- *
- */
+
 /* ====================================================================
  * Copyright 2002 Sun Microsystems, Inc. ALL RIGHTS RESERVED.
  * ECC cipher suite support in OpenSSL originally developed by
@@ -229,7 +128,7 @@ MSG_PROCESS_RETURN tls_process_change_cipher_spec(SSL *s, PACKET *pkt)
 {
     int al;
     long remain;
-    
+
     remain = PACKET_remaining(pkt);
     /*
      * 'Change Cipher Spec' is just a single byte, which should already have
@@ -455,6 +354,16 @@ int tls_get_message_header(SSL *s, int *mt)
                 return 0;
             }
             if (recvd_type == SSL3_RT_CHANGE_CIPHER_SPEC) {
+                /*
+		 * A ChangeCipherSpec must be a single byte and may not occur
+		 * in the middle of a handshake message.
+		 */
+                if (s->init_num != 0 || i != 1 || p[0] != SSL3_MT_CCS) {
+                    al = SSL_AD_UNEXPECTED_MESSAGE;
+                    SSLerr(SSL_F_TLS_GET_MESSAGE_HEADER,
+                           SSL_R_BAD_CHANGE_CIPHER_SPEC);
+                    goto f_err;
+                }
                 s->s3->tmp.message_type = *mt = SSL3_MT_CHANGE_CIPHER_SPEC;
                 s->init_num = i - 1;
                 s->s3->tmp.message_size = i;
@@ -600,43 +509,32 @@ int tls_get_message_body(SSL *s, unsigned long *len)
     return 1;
 }
 
-int ssl_cert_type(X509 *x, EVP_PKEY *pkey)
+int ssl_cert_type(X509 *x, EVP_PKEY *pk)
 {
-    EVP_PKEY *pk;
-    int ret = -1, i;
+    if (pk == NULL &&
+        (pk = X509_get0_pubkey(x)) == NULL)
+        return -1;
 
-    if (pkey == NULL)
-        pk = X509_get_pubkey(x);
-    else
-        pk = pkey;
-    if (pk == NULL)
-        goto err;
-
-    i = pk->type;
-    if (i == EVP_PKEY_RSA) {
-        ret = SSL_PKEY_RSA_ENC;
-    } else if (i == EVP_PKEY_DSA) {
-        ret = SSL_PKEY_DSA_SIGN;
-    }
+    switch (EVP_PKEY_id(pk)) {
+    default:
+        return -1;
+    case EVP_PKEY_RSA:
+        return SSL_PKEY_RSA_ENC;
+    case EVP_PKEY_DSA:
+        return SSL_PKEY_DSA_SIGN;
 #ifndef OPENSSL_NO_EC
-    else if (i == EVP_PKEY_EC) {
-        ret = SSL_PKEY_ECC;
-    }
+    case EVP_PKEY_EC:
+        return SSL_PKEY_ECC;
 #endif
 #ifndef OPENSSL_NO_GOST
-    else if (i == NID_id_GostR3410_2001) {
-        ret = SSL_PKEY_GOST01;
-    } else if (i == NID_id_GostR3410_2012_256) {
-        ret = SSL_PKEY_GOST12_256;
-    } else if (i == NID_id_GostR3410_2012_512) {
-        ret = SSL_PKEY_GOST12_512;
-    }
+    case NID_id_GostR3410_2001:
+        return SSL_PKEY_GOST01;
+    case NID_id_GostR3410_2012_256:
+        return SSL_PKEY_GOST12_256;
+    case NID_id_GostR3410_2012_512:
+        return SSL_PKEY_GOST12_512;
 #endif
-
- err:
-    if (!pkey)
-        EVP_PKEY_free(pk);
-    return (ret);
+    }
 }
 
 int ssl_verify_alarm_type(long type)
@@ -660,6 +558,13 @@ int ssl_verify_alarm_type(long type)
     case X509_V_ERR_CRL_NOT_YET_VALID:
     case X509_V_ERR_CERT_UNTRUSTED:
     case X509_V_ERR_CERT_REJECTED:
+    case X509_V_ERR_HOSTNAME_MISMATCH:
+    case X509_V_ERR_EMAIL_MISMATCH:
+    case X509_V_ERR_IP_ADDRESS_MISMATCH:
+    case X509_V_ERR_DANE_NO_MATCH:
+    case X509_V_ERR_EE_KEY_TOO_SMALL:
+    case X509_V_ERR_CA_KEY_TOO_SMALL:
+    case X509_V_ERR_CA_MD_TOO_WEAK:
         al = SSL_AD_BAD_CERTIFICATE;
         break;
     case X509_V_ERR_CERT_SIGNATURE_FAILURE:
@@ -673,7 +578,10 @@ int ssl_verify_alarm_type(long type)
     case X509_V_ERR_CERT_REVOKED:
         al = SSL_AD_CERTIFICATE_REVOKED;
         break;
+    case X509_V_ERR_UNSPECIFIED:
     case X509_V_ERR_OUT_OF_MEM:
+    case X509_V_ERR_INVALID_CALL:
+    case X509_V_ERR_STORE_LOOKUP:
         al = SSL_AD_INTERNAL_ERROR;
         break;
     case X509_V_ERR_DEPTH_ZERO_SELF_SIGNED_CERT:
@@ -703,4 +611,476 @@ int ssl_allow_compression(SSL *s)
     if (s->options & SSL_OP_NO_COMPRESSION)
         return 0;
     return ssl_security(s, SSL_SECOP_COMPRESSION, 0, 0, NULL);
+}
+
+static int version_cmp(const SSL *s, int a, int b)
+{
+    int dtls = SSL_IS_DTLS(s);
+
+    if (a == b)
+        return 0;
+    if (!dtls)
+        return a < b ? -1 : 1;
+    return DTLS_VERSION_LT(a, b) ? -1 : 1;
+}
+
+typedef struct {
+    int version;
+    const SSL_METHOD *(*cmeth)(void);
+    const SSL_METHOD *(*smeth)(void);
+} version_info;
+
+#if TLS_MAX_VERSION != TLS1_2_VERSION
+# error Code needs update for TLS_method() support beyond TLS1_2_VERSION.
+#endif
+
+static const version_info tls_version_table[] = {
+#ifndef OPENSSL_NO_TLS1_2
+    { TLS1_2_VERSION, tlsv1_2_client_method, tlsv1_2_server_method },
+#else
+    { TLS1_2_VERSION, NULL, NULL },
+#endif
+#ifndef OPENSSL_NO_TLS1_1
+    { TLS1_1_VERSION, tlsv1_1_client_method, tlsv1_1_server_method },
+#else
+    { TLS1_1_VERSION, NULL, NULL },
+#endif
+#ifndef OPENSSL_NO_TLS1
+    { TLS1_VERSION, tlsv1_client_method, tlsv1_server_method },
+#else
+    { TLS1_VERSION, NULL, NULL },
+#endif
+#ifndef OPENSSL_NO_SSL3
+    { SSL3_VERSION, sslv3_client_method, sslv3_server_method },
+#else
+    { SSL3_VERSION, NULL, NULL },
+#endif
+    { 0, NULL, NULL },
+};
+
+#if DTLS_MAX_VERSION != DTLS1_2_VERSION
+# error Code needs update for DTLS_method() support beyond DTLS1_2_VERSION.
+#endif
+
+static const version_info dtls_version_table[] = {
+#ifndef OPENSSL_NO_DTLS1_2
+    { DTLS1_2_VERSION, dtlsv1_2_client_method, dtlsv1_2_server_method },
+#else
+    { DTLS1_2_VERSION, NULL, NULL },
+#endif
+#ifndef OPENSSL_NO_DTLS1
+    { DTLS1_VERSION, dtlsv1_client_method, dtlsv1_server_method },
+#else
+    { DTLS1_VERSION, NULL, NULL },
+#endif
+    { 0, NULL, NULL },
+};
+
+/*
+ * ssl_method_error - Check whether an SSL_METHOD is enabled.
+ *
+ * @s: The SSL handle for the candidate method
+ * @method: the intended method.
+ *
+ * Returns 0 on success, or an SSL error reason on failure.
+ */
+static int ssl_method_error(const SSL *s, const SSL_METHOD *method)
+{
+    int version = method->version;
+
+    if ((s->min_proto_version != 0 &&
+         version_cmp(s, version, s->min_proto_version) < 0) ||
+        ssl_security(s, SSL_SECOP_VERSION, 0, version, NULL) == 0)
+        return SSL_R_VERSION_TOO_LOW;
+
+    if (s->max_proto_version != 0 &&
+             version_cmp(s, version, s->max_proto_version) > 0)
+        return SSL_R_VERSION_TOO_HIGH;
+
+    if ((s->options & method->mask) != 0)
+        return SSL_R_UNSUPPORTED_PROTOCOL;
+    if ((method->flags & SSL_METHOD_NO_SUITEB) != 0 && tls1_suiteb(s))
+        return SSL_R_AT_LEAST_TLS_1_2_NEEDED_IN_SUITEB_MODE;
+    else if ((method->flags & SSL_METHOD_NO_FIPS) != 0 && FIPS_mode())
+        return SSL_R_AT_LEAST_TLS_1_0_NEEDED_IN_FIPS_MODE;
+
+    return 0;
+}
+
+/*
+ * ssl_version_supported - Check that the specified `version` is supported by
+ * `SSL *` instance
+ *
+ * @s: The SSL handle for the candidate method
+ * @version: Protocol version to test against
+ *
+ * Returns 1 when supported, otherwise 0
+ */
+int ssl_version_supported(const SSL *s, int version)
+{
+    const version_info *vent;
+    const version_info *table;
+
+    switch (s->method->version) {
+    default:
+        /* Version should match method version for non-ANY method */
+        return version_cmp(s, version, s->version) == 0;
+    case TLS_ANY_VERSION:
+        table = tls_version_table;
+        break;
+    case DTLS_ANY_VERSION:
+        table = dtls_version_table;
+        break;
+    }
+
+    for (vent = table;
+         vent->version != 0 && version_cmp(s, version, vent->version) <= 0;
+         ++vent) {
+        if (vent->cmeth != NULL &&
+            version_cmp(s, version, vent->version) == 0 &&
+            ssl_method_error(s, vent->cmeth()) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/*
+ * ssl_check_version_downgrade - In response to RFC7507 SCSV version
+ * fallback indication from a client check whether we're using the highest
+ * supported protocol version.
+ *
+ * @s server SSL handle.
+ *
+ * Returns 1 when using the highest enabled version, 0 otherwise.
+ */
+int ssl_check_version_downgrade(SSL *s)
+{
+    const version_info *vent;
+    const version_info *table;
+
+    /*
+     * Check that the current protocol is the highest enabled version
+     * (according to s->ctx->method, as version negotiation may have changed
+     * s->method).
+     */
+    if (s->version == s->ctx->method->version)
+        return 1;
+
+    /*
+     * Apparently we're using a version-flexible SSL_METHOD (not at its
+     * highest protocol version).
+     */
+    if (s->ctx->method->version == TLS_method()->version)
+        table = tls_version_table;
+    else if (s->ctx->method->version == DTLS_method()->version)
+        table = dtls_version_table;
+    else {
+        /* Unexpected state; fail closed. */
+        return 0;
+    }
+
+    for (vent = table; vent->version != 0; ++vent) {
+        if (vent->smeth != NULL &&
+            ssl_method_error(s, vent->smeth()) == 0)
+            return s->version == vent->version;
+    }
+    return 0;
+}
+
+/*
+ * ssl_set_version_bound - set an upper or lower bound on the supported (D)TLS
+ * protocols, provided the initial (D)TLS method is version-flexible.  This
+ * function sanity-checks the proposed value and makes sure the method is
+ * version-flexible, then sets the limit if all is well.
+ *
+ * @method_version: The version of the current SSL_METHOD.
+ * @version: the intended limit.
+ * @bound: pointer to limit to be updated.
+ *
+ * Returns 1 on success, 0 on failure.
+ */
+int ssl_set_version_bound(int method_version, int version, int *bound)
+{
+    if (version == 0) {
+        *bound = version;
+        return 1;
+    }
+
+    /*-
+     * Restrict TLS methods to TLS protocol versions.
+     * Restrict DTLS methods to DTLS protocol versions.
+     * Note, DTLS version numbers are decreasing, use comparison macros.
+     *
+     * Note that for both lower-bounds we use explicit versions, not
+     * (D)TLS_MIN_VERSION.  This is because we don't want to break user
+     * configurations.  If the MIN (supported) version ever rises, the user's
+     * "floor" remains valid even if no longer available.  We don't expect the
+     * MAX ceiling to ever get lower, so making that variable makes sense.
+     */
+    switch (method_version) {
+    default:
+        /*
+         * XXX For fixed version methods, should we always fail and not set any
+         * bounds, always succeed and not set any bounds, or set the bounds and
+         * arrange to fail later if they are not met?  At present fixed-version
+         * methods are not subject to controls that disable individual protocol
+         * versions.
+         */
+        return 0;
+
+    case TLS_ANY_VERSION:
+        if (version < SSL3_VERSION || version > TLS_MAX_VERSION)
+            return 0;
+        break;
+
+    case DTLS_ANY_VERSION:
+        if (DTLS_VERSION_GT(version, DTLS_MAX_VERSION) ||
+            DTLS_VERSION_LT(version, DTLS1_VERSION))
+            return 0;
+        break;
+    }
+
+    *bound = version;
+    return 1;
+}
+
+/*
+ * ssl_choose_server_version - Choose server (D)TLS version.  Called when the
+ * client HELLO is received to select the final server protocol version and
+ * the version specific method.
+ *
+ * @s: server SSL handle.
+ *
+ * Returns 0 on success or an SSL error reason number on failure.
+ */
+int ssl_choose_server_version(SSL *s)
+{
+    /*-
+     * With version-flexible methods we have an initial state with:
+     *
+     *   s->method->version == (D)TLS_ANY_VERSION,
+     *   s->version == (D)TLS_MAX_VERSION.
+     *
+     * So we detect version-flexible methods via the method version, not the
+     * handle version.
+     */
+    int server_version = s->method->version;
+    int client_version = s->client_version;
+    const version_info *vent;
+    const version_info *table;
+    int disabled = 0;
+
+    switch (server_version) {
+    default:
+        if (version_cmp(s, client_version, s->version) < 0)
+            return SSL_R_WRONG_SSL_VERSION;
+        /*
+         * If this SSL handle is not from a version flexible method we don't
+         * (and never did) check min/max FIPS or Suite B constraints.  Hope
+         * that's OK.  It is up to the caller to not choose fixed protocol
+         * versions they don't want.  If not, then easy to fix, just return
+         * ssl_method_error(s, s->method)
+         */
+        return 0;
+    case TLS_ANY_VERSION:
+        table = tls_version_table;
+        break;
+    case DTLS_ANY_VERSION:
+        table = dtls_version_table;
+        break;
+    }
+
+    for (vent = table; vent->version != 0; ++vent) {
+        const SSL_METHOD *method;
+
+        if (vent->smeth == NULL ||
+            version_cmp(s, client_version, vent->version) < 0)
+            continue;
+        method = vent->smeth();
+        if (ssl_method_error(s, method) == 0) {
+            s->version = vent->version;
+            s->method = method;
+            return 0;
+        }
+        disabled = 1;
+    }
+    return disabled ? SSL_R_UNSUPPORTED_PROTOCOL : SSL_R_VERSION_TOO_LOW;
+}
+
+/*
+ * ssl_choose_client_version - Choose client (D)TLS version.  Called when the
+ * server HELLO is received to select the final client protocol version and
+ * the version specific method.
+ *
+ * @s: client SSL handle.
+ * @version: The proposed version from the server's HELLO.
+ *
+ * Returns 0 on success or an SSL error reason number on failure.
+ */
+int ssl_choose_client_version(SSL *s, int version)
+{
+    const version_info *vent;
+    const version_info *table;
+
+    switch (s->method->version) {
+    default:
+        if (version != s->version)
+            return SSL_R_WRONG_SSL_VERSION;
+        /*
+         * If this SSL handle is not from a version flexible method we don't
+         * (and never did) check min/max, FIPS or Suite B constraints.  Hope
+         * that's OK.  It is up to the caller to not choose fixed protocol
+         * versions they don't want.  If not, then easy to fix, just return
+         * ssl_method_error(s, s->method)
+         */
+        return 0;
+    case TLS_ANY_VERSION:
+        table = tls_version_table;
+        break;
+    case DTLS_ANY_VERSION:
+        table = dtls_version_table;
+        break;
+    }
+
+    for (vent = table; vent->version != 0; ++vent) {
+        const SSL_METHOD *method;
+        int err;
+
+        if (version != vent->version)
+            continue;
+        if (vent->cmeth == NULL)
+            break;
+        method = vent->cmeth();
+        err = ssl_method_error(s, method);
+        if (err != 0)
+            return err;
+        s->method = method;
+        s->version = version;
+        return 0;
+    }
+
+    return SSL_R_UNSUPPORTED_PROTOCOL;
+}
+
+/*
+ * ssl_get_client_min_max_version - get minimum and maximum client version
+ * @s: The SSL connection
+ * @min_version: The minimum supported version
+ * @max_version: The maximum supported version
+ *
+ * Work out what version we should be using for the initial ClientHello if the
+ * version is initially (D)TLS_ANY_VERSION.  We apply any explicit SSL_OP_NO_xxx
+ * options, the MinProtocol and MaxProtocol configuration commands, any Suite B
+ * or FIPS_mode() constraints and any floor imposed by the security level here,
+ * so we don't advertise the wrong protocol version to only reject the outcome later.
+ *
+ * Computing the right floor matters.  If, e.g.,  TLS 1.0 and 1.2 are enabled,
+ * TLS 1.1 is disabled, but the security level, Suite-B  and/or MinProtocol
+ * only allow TLS 1.2, we want to advertise TLS1.2, *not* TLS1.
+ *
+ * Returns 0 on success or an SSL error reason number on failure.  On failure
+ * min_version and max_version will also be set to 0.
+ */
+int ssl_get_client_min_max_version(const SSL *s, int *min_version, int *max_version)
+{
+    int version;
+    int hole;
+    const SSL_METHOD *single = NULL;
+    const SSL_METHOD *method;
+    const version_info *table;
+    const version_info *vent;
+
+    switch (s->method->version) {
+    default:
+        /*
+         * If this SSL handle is not from a version flexible method we don't
+         * (and never did) check min/max FIPS or Suite B constraints.  Hope
+         * that's OK.  It is up to the caller to not choose fixed protocol
+         * versions they don't want.  If not, then easy to fix, just return
+         * ssl_method_error(s, s->method)
+         */
+        *min_version = *max_version = s->version;
+        return 0;
+    case TLS_ANY_VERSION:
+        table = tls_version_table;
+        break;
+    case DTLS_ANY_VERSION:
+        table = dtls_version_table;
+        break;
+    }
+
+    /*
+     * SSL_OP_NO_X disables all protocols above X *if* there are some protocols
+     * below X enabled. This is required in order to maintain the "version
+     * capability" vector contiguous. Any versions with a NULL client method
+     * (protocol version client is disabled at compile-time) is also a "hole".
+     *
+     * Our initial state is hole == 1, version == 0.  That is, versions above
+     * the first version in the method table are disabled (a "hole" above
+     * the valid protocol entries) and we don't have a selected version yet.
+     *
+     * Whenever "hole == 1", and we hit an enabled method, its version becomes
+     * the selected version, and the method becomes a candidate "single"
+     * method.  We're no longer in a hole, so "hole" becomes 0.
+     *
+     * If "hole == 0" and we hit an enabled method, then "single" is cleared,
+     * as we support a contiguous range of at least two methods.  If we hit
+     * a disabled method, then hole becomes true again, but nothing else
+     * changes yet, because all the remaining methods may be disabled too.
+     * If we again hit an enabled method after the new hole, it becomes
+     * selected, as we start from scratch.
+     */
+    *min_version = version = 0;
+    hole = 1;
+    for (vent = table; vent->version != 0; ++vent) {
+        /*
+         * A table entry with a NULL client method is still a hole in the
+         * "version capability" vector.
+         */
+        if (vent->cmeth == NULL) {
+            hole = 1;
+            continue;
+        }
+        method = vent->cmeth();
+        if (ssl_method_error(s, method) != 0) {
+            hole = 1;
+        } else if (!hole) {
+            single = NULL;
+            *min_version = method->version;
+        } else {
+            version = (single = method)->version;
+            *min_version = version;
+            hole = 0;
+        }
+    }
+
+    *max_version = version;
+
+    /* Fail if everything is disabled */
+    if (version == 0)
+        return SSL_R_NO_PROTOCOLS_AVAILABLE;
+
+    return 0;
+}
+
+/*
+ * ssl_set_client_hello_version - Work out what version we should be using for
+ * the initial ClientHello.
+ *
+ * @s: client SSL handle.
+ *
+ * Returns 0 on success or an SSL error reason number on failure.
+ */
+int ssl_set_client_hello_version(SSL *s)
+{
+    int ver_min, ver_max, ret;
+
+    ret = ssl_get_client_min_max_version(s, &ver_min, &ver_max);
+
+    if (ret != 0)
+        return ret;
+
+    s->client_version = s->version = ver_max;
+    return 0;
 }

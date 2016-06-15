@@ -1,54 +1,10 @@
-/* engines/e_ossltest.c */
 /*
- * Written by Matt Caswell (matt@openssl.org) for the OpenSSL project.
- */
-/* ====================================================================
- * Copyright (c) 2015 The OpenSSL Project.  All rights reserved.
+ * Copyright 2015-2016 The OpenSSL Project Authors. All Rights Reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- *
- * 1. Redistributions of source code must retain the above copyright
- *    notice, this list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright
- *    notice, this list of conditions and the following disclaimer in
- *    the documentation and/or other materials provided with the
- *    distribution.
- *
- * 3. All advertising materials mentioning features or use of this
- *    software must display the following acknowledgment:
- *    "This product includes software developed by the OpenSSL Project
- *    for use in the OpenSSL Toolkit. (http://www.OpenSSL.org/)"
- *
- * 4. The names "OpenSSL Toolkit" and "OpenSSL Project" must not be used to
- *    endorse or promote products derived from this software without
- *    prior written permission. For written permission, please contact
- *    licensing@OpenSSL.org.
- *
- * 5. Products derived from this software may not be called "OpenSSL"
- *    nor may "OpenSSL" appear in their names without prior written
- *    permission of the OpenSSL Project.
- *
- * 6. Redistributions of any form whatsoever must retain the following
- *    acknowledgment:
- *    "This product includes software developed by the OpenSSL Project
- *    for use in the OpenSSL Toolkit (http://www.OpenSSL.org/)"
- *
- * THIS SOFTWARE IS PROVIDED BY THE OpenSSL PROJECT ``AS IS'' AND ANY
- * EXPRESSED OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
- * PURPOSE ARE DISCLAIMED.  IN NO EVENT SHALL THE OpenSSL PROJECT OR
- * ITS CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT
- * NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
- * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
- * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,
- * STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED
- * OF THE POSSIBILITY OF SUCH DAMAGE.
- * ====================================================================
+ * Licensed under the OpenSSL license (the "License").  You may not use
+ * this file except in compliance with the License.  You can obtain a copy
+ * in the file LICENSE in the source distribution or at
+ * https://www.openssl.org/source/license.html
  */
 
 /*
@@ -67,6 +23,7 @@
 #include <openssl/evp.h>
 #include <openssl/modes.h>
 #include <openssl/aes.h>
+#include <openssl/crypto.h>
 
 #define OSSLTEST_LIB_NAME "OSSLTEST"
 #include "e_ossltest_err.c"
@@ -279,19 +236,33 @@ int ossltest_aes128_init_key(EVP_CIPHER_CTX *ctx, const unsigned char *key,
 int ossltest_aes128_cbc_cipher(EVP_CIPHER_CTX *ctx, unsigned char *out,
                                const unsigned char *in, size_t inl);
 
-static const EVP_CIPHER ossltest_aes_128_cbc = { \
-    NID_aes_128_cbc,
-    16, /* block size */
-    16, /* key len */
-    16, /* iv len */
-    EVP_CIPH_FLAG_DEFAULT_ASN1 | EVP_CIPH_CBC_MODE,
-    ossltest_aes128_init_key,
-    ossltest_aes128_cbc_cipher,
-    NULL,
-    0, /* We don't know the size of cipher_data at compile time */
-    NULL,NULL,NULL,NULL
-};
-
+static EVP_CIPHER *_hidden_aes_128_cbc = NULL;
+static const EVP_CIPHER *ossltest_aes_128_cbc(void)
+{
+    if (_hidden_aes_128_cbc == NULL
+        && ((_hidden_aes_128_cbc = EVP_CIPHER_meth_new(NID_aes_128_cbc,
+                                                       16 /* block size */,
+                                                       16 /* key len */)) == NULL
+            || !EVP_CIPHER_meth_set_iv_length(_hidden_aes_128_cbc,16)
+            || !EVP_CIPHER_meth_set_flags(_hidden_aes_128_cbc,
+                                          EVP_CIPH_FLAG_DEFAULT_ASN1
+                                          | EVP_CIPH_CBC_MODE)
+            || !EVP_CIPHER_meth_set_init(_hidden_aes_128_cbc,
+                                         ossltest_aes128_init_key)
+            || !EVP_CIPHER_meth_set_do_cipher(_hidden_aes_128_cbc,
+                                              ossltest_aes128_cbc_cipher)
+            || !EVP_CIPHER_meth_set_impl_ctx_size(_hidden_aes_128_cbc,
+                                                  EVP_CIPHER_impl_ctx_size(EVP_aes_128_cbc())))) {
+        EVP_CIPHER_meth_free(_hidden_aes_128_cbc);
+        _hidden_aes_128_cbc = NULL;
+    }
+    return _hidden_aes_128_cbc;
+}
+static void destroy_ciphers(void)
+{
+    EVP_CIPHER_meth_free(_hidden_aes_128_cbc);
+    _hidden_aes_128_cbc = NULL;
+}
 
 static int bind_ossltest(ENGINE *e)
 {
@@ -365,6 +336,7 @@ static int ossltest_finish(ENGINE *e)
 static int ossltest_destroy(ENGINE *e)
 {
     destroy_digests();
+    destroy_ciphers();
     ERR_unload_OSSLTEST_strings();
     return 1;
 }
@@ -415,7 +387,7 @@ static int ossltest_ciphers(ENGINE *e, const EVP_CIPHER **cipher,
     /* We are being asked for a specific cipher */
     switch (nid) {
     case NID_aes_128_cbc:
-        *cipher = &ossltest_aes_128_cbc;
+        *cipher = ossltest_aes_128_cbc();
         break;
     default:
         ok = 0;
@@ -569,20 +541,7 @@ static int digest_sha512_final(EVP_MD_CTX *ctx, unsigned char *md)
 int ossltest_aes128_init_key(EVP_CIPHER_CTX *ctx, const unsigned char *key,
                              const unsigned char *iv, int enc)
 {
-    if (ctx->cipher_data == NULL) {
-        /*
-         * Normally cipher_data is allocated automatically for an engine but
-         * we don't know the ctx_size as compile time so we have to do it at
-         * run time
-         */
-        ctx->cipher_data = OPENSSL_zalloc(EVP_aes_128_cbc()->ctx_size);
-        if (ctx->cipher_data == NULL) {
-            OSSLTESTerr(OSSLTEST_F_OSSLTEST_AES128_INIT_KEY,
-                        ERR_R_MALLOC_FAILURE);
-            return 0;
-        }
-    }
-    return EVP_aes_128_cbc()->init(ctx, key, iv, enc);
+    return EVP_CIPHER_meth_get_init(EVP_aes_128_cbc()) (ctx, key, iv, enc);
 }
 
 int ossltest_aes128_cbc_cipher(EVP_CIPHER_CTX *ctx, unsigned char *out,
@@ -599,7 +558,7 @@ int ossltest_aes128_cbc_cipher(EVP_CIPHER_CTX *ctx, unsigned char *out,
     memcpy(tmpbuf, in, inl);
 
     /* Go through the motions of encrypting it */
-    ret = EVP_aes_128_cbc()->do_cipher(ctx, out, in, inl);
+    ret = EVP_CIPHER_meth_get_do_cipher(EVP_aes_128_cbc())(ctx, out, in, inl);
 
     /* Throw it all away and just use the plaintext as the output */
     memcpy(out, tmpbuf, inl);

@@ -1,56 +1,10 @@
-/* asn_mime.c */
 /*
- * Written by Dr Stephen N Henson (steve@openssl.org) for the OpenSSL
- * project.
- */
-/* ====================================================================
- * Copyright (c) 1999-2008 The OpenSSL Project.  All rights reserved.
+ * Copyright 2008-2016 The OpenSSL Project Authors. All Rights Reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- *
- * 1. Redistributions of source code must retain the above copyright
- *    notice, this list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright
- *    notice, this list of conditions and the following disclaimer in
- *    the documentation and/or other materials provided with the
- *    distribution.
- *
- * 3. All advertising materials mentioning features or use of this
- *    software must display the following acknowledgment:
- *    "This product includes software developed by the OpenSSL Project
- *    for use in the OpenSSL Toolkit. (http://www.OpenSSL.org/)"
- *
- * 4. The names "OpenSSL Toolkit" and "OpenSSL Project" must not be used to
- *    endorse or promote products derived from this software without
- *    prior written permission. For written permission, please contact
- *    licensing@OpenSSL.org.
- *
- * 5. Products derived from this software may not be called "OpenSSL"
- *    nor may "OpenSSL" appear in their names without prior written
- *    permission of the OpenSSL Project.
- *
- * 6. Redistributions of any form whatsoever must retain the following
- *    acknowledgment:
- *    "This product includes software developed by the OpenSSL Project
- *    for use in the OpenSSL Toolkit (http://www.OpenSSL.org/)"
- *
- * THIS SOFTWARE IS PROVIDED BY THE OpenSSL PROJECT ``AS IS'' AND ANY
- * EXPRESSED OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
- * PURPOSE ARE DISCLAIMED.  IN NO EVENT SHALL THE OpenSSL PROJECT OR
- * ITS CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT
- * NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
- * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
- * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,
- * STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED
- * OF THE POSSIBILITY OF SUCH DAMAGE.
- * ====================================================================
- *
+ * Licensed under the OpenSSL license (the "License").  You may not use
+ * this file except in compliance with the License.  You can obtain a copy
+ * in the file LICENSE in the source distribution or at
+ * https://www.openssl.org/source/license.html
  */
 
 #include <stdio.h>
@@ -61,6 +15,7 @@
 #include <openssl/asn1.h>
 #include <openssl/asn1t.h>
 #include "internal/evp_int.h"
+#include "internal/bio.h"
 #include "asn1_locl.h"
 
 /*
@@ -73,20 +28,16 @@
  * from parameter values. Quotes are stripped off
  */
 
-typedef struct {
+struct mime_param_st {
     char *param_name;           /* Param name e.g. "micalg" */
     char *param_value;          /* Param value e.g. "sha1" */
-} MIME_PARAM;
+};
 
-DECLARE_STACK_OF(MIME_PARAM)
-
-typedef struct {
+struct mime_header_st {
     char *name;                 /* Name of line e.g. "content-type" */
     char *value;                /* Value of line e.g. "text/plain" */
     STACK_OF(MIME_PARAM) *params; /* Zero or more parameters */
-} MIME_HEADER;
-
-DECLARE_STACK_OF(MIME_HEADER)
+};
 
 static int asn1_output_data(BIO *out, BIO *data, ASN1_VALUE *val, int flags,
                             const ASN1_ITEM *it);
@@ -191,7 +142,7 @@ static ASN1_VALUE *b64_read_asn1(BIO *bio, const ASN1_ITEM *it)
     if (!val)
         ASN1err(ASN1_F_B64_READ_ASN1, ASN1_R_DECODE_ERROR);
     (void)BIO_flush(bio);
-    bio = BIO_pop(bio);
+    BIO_pop(bio);
     BIO_free(b64);
     return val;
 }
@@ -369,7 +320,7 @@ static int asn1_output_data(BIO *out, BIO *data, ASN1_VALUE *val, int flags,
     int rv = 1;
 
     /*
-     * If data is not deteched or resigning then the output BIO is already
+     * If data is not detached or resigning then the output BIO is already
      * set up to finalise when it is written through.
      */
     if (!(flags & SMIME_DETACHED) || (flags & PKCS7_REUSE_DIGEST)) {

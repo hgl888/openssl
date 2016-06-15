@@ -1,59 +1,10 @@
-/* ssl/statem/statem.c */
 /*
- * Written by Matt Caswell for the OpenSSL project.
- */
-/* ====================================================================
- * Copyright (c) 1998-2015 The OpenSSL Project.  All rights reserved.
+ * Copyright 2015-2016 The OpenSSL Project Authors. All Rights Reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- *
- * 1. Redistributions of source code must retain the above copyright
- *    notice, this list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright
- *    notice, this list of conditions and the following disclaimer in
- *    the documentation and/or other materials provided with the
- *    distribution.
- *
- * 3. All advertising materials mentioning features or use of this
- *    software must display the following acknowledgment:
- *    "This product includes software developed by the OpenSSL Project
- *    for use in the OpenSSL Toolkit. (http://www.openssl.org/)"
- *
- * 4. The names "OpenSSL Toolkit" and "OpenSSL Project" must not be used to
- *    endorse or promote products derived from this software without
- *    prior written permission. For written permission, please contact
- *    openssl-core@openssl.org.
- *
- * 5. Products derived from this software may not be called "OpenSSL"
- *    nor may "OpenSSL" appear in their names without prior written
- *    permission of the OpenSSL Project.
- *
- * 6. Redistributions of any form whatsoever must retain the following
- *    acknowledgment:
- *    "This product includes software developed by the OpenSSL Project
- *    for use in the OpenSSL Toolkit (http://www.openssl.org/)"
- *
- * THIS SOFTWARE IS PROVIDED BY THE OpenSSL PROJECT ``AS IS'' AND ANY
- * EXPRESSED OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
- * PURPOSE ARE DISCLAIMED.  IN NO EVENT SHALL THE OpenSSL PROJECT OR
- * ITS CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT
- * NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
- * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
- * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,
- * STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED
- * OF THE POSSIBILITY OF SUCH DAMAGE.
- * ====================================================================
- *
- * This product includes cryptographic software written by Eric Young
- * (eay@cryptsoft.com).  This product includes software written by Tim
- * Hudson (tjh@cryptsoft.com).
- *
+ * Licensed under the OpenSSL license (the "License").  You may not use
+ * this file except in compliance with the License.  You can obtain a copy
+ * in the file LICENSE in the source distribution or at
+ * https://www.openssl.org/source/license.html
  */
 
 #include <openssl/rand.h>
@@ -261,7 +212,8 @@ static void (*get_callback(SSL *s))(const SSL *, int, int)
  *   1: Success
  * <=0: NBIO or error
  */
-static int state_machine(SSL *s, int server) {
+static int state_machine(SSL *s, int server)
+{
     BUF_MEM *buf = NULL;
     unsigned long Time = (unsigned long)time(NULL);
     void (*cb) (const SSL *ssl, int type, int val) = NULL;
@@ -336,19 +288,15 @@ static int state_machine(SSL *s, int server) {
                 goto end;
             }
         } else {
-            if ((s->version >> 8) != SSL3_VERSION_MAJOR
-                    && s->version != TLS_ANY_VERSION) {
+            if ((s->version >> 8) != SSL3_VERSION_MAJOR) {
                 SSLerr(SSL_F_STATE_MACHINE, ERR_R_INTERNAL_ERROR);
                 goto end;
             }
         }
 
-        if (!SSL_IS_DTLS(s)) {
-            if (s->version != TLS_ANY_VERSION &&
-                    !ssl_security(s, SSL_SECOP_VERSION, 0, s->version, NULL)) {
-                SSLerr(SSL_F_STATE_MACHINE, SSL_R_VERSION_TOO_LOW);
-                goto end;
-            }
+        if (!ssl_security(s, SSL_SECOP_VERSION, 0, s->version, NULL)) {
+            SSLerr(SSL_F_STATE_MACHINE, SSL_R_VERSION_TOO_LOW);
+            goto end;
         }
 
         if (s->init_buf == NULL) {
@@ -372,19 +320,23 @@ static int state_machine(SSL *s, int server) {
          */
         s->s3->change_cipher_spec = 0;
 
-        if (!server || st->state != MSG_FLOW_RENEGOTIATE) {
-                /*
-                 * Ok, we now need to push on a buffering BIO ...but not with
-                 * SCTP
-                 */
-#ifndef OPENSSL_NO_SCTP
-                if (!SSL_IS_DTLS(s) || !BIO_dgram_is_sctp(SSL_get_wbio(s)))
-#endif
-                    if (!ssl_init_wbio_buffer(s, server ? 1 : 0)) {
-                        goto end;
-                    }
 
-            ssl3_init_finished_mac(s);
+        /*
+         * Ok, we now need to push on a buffering BIO ...but not with
+         * SCTP
+         */
+#ifndef OPENSSL_NO_SCTP
+        if (!SSL_IS_DTLS(s) || !BIO_dgram_is_sctp(SSL_get_wbio(s)))
+#endif
+            if (!ssl_init_wbio_buffer(s)) {
+                goto end;
+            }
+
+        if (!server || st->state != MSG_FLOW_RENEGOTIATE) {
+            if (!ssl3_init_finished_mac(s)) {
+                ossl_statem_set_error(s);
+                goto end;
+            }
         }
 
         if (server) {
@@ -515,7 +467,7 @@ static void init_read_state_machine(SSL *s)
  * READ_STATE_POST_PROCESS is an optional step that may occur if some post
  * processing activity performed on the message may block.
  *
- * Any of the above states could result in an NBIO event occuring in which case
+ * Any of the above states could result in an NBIO event occurring in which case
  * control returns to the calling application. When this function is recalled we
  * will resume in the same state where we left off.
  */
@@ -552,7 +504,6 @@ static SUB_STATE_RETURN read_state_machine(SSL *s) {
     while(1) {
         switch(st->read_state) {
         case READ_STATE_HEADER:
-            s->init_num = 0;
             /* Get the state the peer wants to move to */
             if (SSL_IS_DTLS(s)) {
                 /*
@@ -611,6 +562,10 @@ static SUB_STATE_RETURN read_state_machine(SSL *s) {
                 return SUB_STATE_ERROR;
             }
             ret = process_message(s, &pkt);
+
+            /* Discard the packet data */
+            s->init_num = 0;
+
             if (ret == MSG_PROCESS_ERROR) {
                 return SUB_STATE_ERROR;
             }
@@ -706,7 +661,7 @@ static void init_write_state_machine(SSL *s)
  * WRITE_STATE_TRANSITION transitions the state of the handshake state machine
 
  * WRITE_STATE_PRE_WORK performs any work necessary to prepare the later
- * sending of the message. This could result in an NBIO event occuring in
+ * sending of the message. This could result in an NBIO event occurring in
  * which case control returns to the calling application. When this function
  * is recalled we will resume in the same state where we left off.
  *

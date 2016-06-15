@@ -1,56 +1,10 @@
-/* ssl/t1_trce.c */
 /*
- * Written by Dr Stephen N Henson (steve@openssl.org) for the OpenSSL
- * project.
- */
-/* ====================================================================
- * Copyright (c) 2012 The OpenSSL Project.  All rights reserved.
+ * Copyright 2012-2016 The OpenSSL Project Authors. All Rights Reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- *
- * 1. Redistributions of source code must retain the above copyright
- *    notice, this list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright
- *    notice, this list of conditions and the following disclaimer in
- *    the documentation and/or other materials provided with the
- *    distribution.
- *
- * 3. All advertising materials mentioning features or use of this
- *    software must display the following acknowledgment:
- *    "This product includes software developed by the OpenSSL Project
- *    for use in the OpenSSL Toolkit. (http://www.OpenSSL.org/)"
- *
- * 4. The names "OpenSSL Toolkit" and "OpenSSL Project" must not be used to
- *    endorse or promote products derived from this software without
- *    prior written permission. For written permission, please contact
- *    licensing@OpenSSL.org.
- *
- * 5. Products derived from this software may not be called "OpenSSL"
- *    nor may "OpenSSL" appear in their names without prior written
- *    permission of the OpenSSL Project.
- *
- * 6. Redistributions of any form whatsoever must retain the following
- *    acknowledgment:
- *    "This product includes software developed by the OpenSSL Project
- *    for use in the OpenSSL Toolkit (http://www.OpenSSL.org/)"
- *
- * THIS SOFTWARE IS PROVIDED BY THE OpenSSL PROJECT ``AS IS'' AND ANY
- * EXPRESSED OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
- * PURPOSE ARE DISCLAIMED.  IN NO EVENT SHALL THE OpenSSL PROJECT OR
- * ITS CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT
- * NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
- * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
- * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,
- * STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED
- * OF THE POSSIBILITY OF SUCH DAMAGE.
- * ====================================================================
- *
+ * Licensed under the OpenSSL license (the "License").  You may not use
+ * this file except in compliance with the License.  You can obtain a copy
+ * in the file LICENSE in the source distribution or at
+ * https://www.openssl.org/source/license.html
  */
 
 #include "ssl_locl.h"
@@ -117,7 +71,7 @@ static ssl_trace_tbl ssl_content_tbl[] = {
     {SSL3_RT_ALERT, "Alert"},
     {SSL3_RT_HANDSHAKE, "Handshake"},
     {SSL3_RT_APPLICATION_DATA, "ApplicationData"},
-    {TLS1_RT_HEARTBEAT, "HeartBeat"}
+    {DTLS1_RT_HEARTBEAT, "HeartBeat"}
 };
 
 /* Handshake types */
@@ -498,7 +452,10 @@ static ssl_trace_tbl ssl_exts_tbl[] = {
     {TLSEXT_TYPE_heartbeat, "heartbeat"},
     {TLSEXT_TYPE_session_ticket, "session_ticket"},
     {TLSEXT_TYPE_renegotiate, "renegotiate"},
+#ifndef OPENSSL_NO_NEXTPROTONEG
     {TLSEXT_TYPE_next_proto_neg, "next_proto_neg"},
+#endif
+    {TLSEXT_TYPE_signed_certificate_timestamp, "signed_certificate_timestamps"},
     {TLSEXT_TYPE_padding, "padding"},
     {TLSEXT_TYPE_encrypt_then_mac, "encrypt_then_mac"},
     {TLSEXT_TYPE_extended_master_secret, "extended_master_secret"}
@@ -921,14 +878,6 @@ static int ssl_get_keyex(const char **pname, SSL *ssl)
         *pname = "ECDHE";
         return SSL_kECDHE;
     }
-    if (alg_k & SSL_kECDHr) {
-        *pname = "ECDH RSA";
-        return SSL_kECDHr;
-    }
-    if (alg_k & SSL_kECDHe) {
-        *pname = "ECDH ECDSA";
-        return SSL_kECDHe;
-    }
     if (alg_k & SSL_kPSK) {
         *pname = "PSK";
         return SSL_kPSK;
@@ -991,13 +940,6 @@ static int ssl_print_client_keyex(BIO *bio, int indent, SSL *ssl,
             return 0;
         break;
 
-    case SSL_kECDHr:
-    case SSL_kECDHe:
-        if (msglen == 0) {
-            BIO_indent(bio, indent + 2, 80);
-            BIO_puts(bio, "implicit\n");
-            break;
-        }
     case SSL_kECDHE:
     case SSL_kECDHEPSK:
         if (!ssl_print_hexbuf(bio, indent + 2, "ecdh_Yc", 1, &msg, &msglen))
@@ -1023,13 +965,6 @@ static int ssl_print_server_keyex(BIO *bio, int indent, SSL *ssl,
             return 0;
     }
     switch (id) {
-        /* Should never happen */
-    case SSL_kECDHr:
-    case SSL_kECDHe:
-        BIO_indent(bio, indent + 2, 80);
-        BIO_printf(bio, "Unexpected Message\n");
-        break;
-
     case SSL_kRSA:
 
         if (!ssl_print_hexbuf(bio, indent + 2, "rsa_modulus", 2,
@@ -1401,7 +1336,7 @@ void SSL_trace(int write_p, int version, int content_type,
                        SSL_alert_type_string_long(msg[0] << 8),
                        msg[0], SSL_alert_desc_string_long(msg[1]), msg[1]);
         }
-    case TLS1_RT_HEARTBEAT:
+    case DTLS1_RT_HEARTBEAT:
         ssl_print_heartbeat(bio, 4, msg, msglen);
         break;
 

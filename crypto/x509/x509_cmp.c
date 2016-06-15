@@ -1,59 +1,10 @@
-/* crypto/x509/x509_cmp.c */
-/* Copyright (C) 1995-1998 Eric Young (eay@cryptsoft.com)
- * All rights reserved.
+/*
+ * Copyright 1995-2016 The OpenSSL Project Authors. All Rights Reserved.
  *
- * This package is an SSL implementation written
- * by Eric Young (eay@cryptsoft.com).
- * The implementation was written so as to conform with Netscapes SSL.
- *
- * This library is free for commercial and non-commercial use as long as
- * the following conditions are aheared to.  The following conditions
- * apply to all code found in this distribution, be it the RC4, RSA,
- * lhash, DES, etc., code; not just the SSL code.  The SSL documentation
- * included with this distribution is covered by the same copyright terms
- * except that the holder is Tim Hudson (tjh@cryptsoft.com).
- *
- * Copyright remains Eric Young's, and as such any Copyright notices in
- * the code are not to be removed.
- * If this package is used in a product, Eric Young should be given attribution
- * as the author of the parts of the library used.
- * This can be in the form of a textual message at program startup or
- * in documentation (online or textual) provided with the package.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- * 1. Redistributions of source code must retain the copyright
- *    notice, this list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright
- *    notice, this list of conditions and the following disclaimer in the
- *    documentation and/or other materials provided with the distribution.
- * 3. All advertising materials mentioning features or use of this software
- *    must display the following acknowledgement:
- *    "This product includes cryptographic software written by
- *     Eric Young (eay@cryptsoft.com)"
- *    The word 'cryptographic' can be left out if the rouines from the library
- *    being used are not cryptographic related :-).
- * 4. If you include any Windows specific code (or a derivative thereof) from
- *    the apps directory (application code) you must include an acknowledgement:
- *    "This product includes software written by Tim Hudson (tjh@cryptsoft.com)"
- *
- * THIS SOFTWARE IS PROVIDED BY ERIC YOUNG ``AS IS'' AND
- * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
- * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
- * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
- * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
- * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
- * SUCH DAMAGE.
- *
- * The licence and distribution terms for any publically available version or
- * derivative of this code cannot be changed.  i.e. this code cannot simply be
- * copied and put under another distribution licence
- * [including the GNU Public Licence.]
+ * Licensed under the OpenSSL license (the "License").  You may not use
+ * this file except in compliance with the License.  You can obtain a copy
+ * in the file LICENSE in the source distribution or at
+ * https://www.openssl.org/source/license.html
  */
 
 #include <stdio.h>
@@ -188,9 +139,10 @@ int X509_cmp(const X509 *a, const X509 *b)
         return rv;
     /* Check for match against stored encoding too */
     if (!a->cert_info.enc.modified && !b->cert_info.enc.modified) {
-        rv = (int)(a->cert_info.enc.len - b->cert_info.enc.len);
-        if (rv)
-            return rv;
+        if (a->cert_info.enc.len < b->cert_info.enc.len)
+            return -1;
+        if (a->cert_info.enc.len > b->cert_info.enc.len)
+            return 1;
         return memcmp(a->cert_info.enc.enc, b->cert_info.enc.enc,
                       a->cert_info.enc.len);
     }
@@ -319,13 +271,6 @@ EVP_PKEY *X509_get_pubkey(X509 *x)
     return X509_PUBKEY_get(x->cert_info.key);
 }
 
-ASN1_BIT_STRING *X509_get0_pubkey_bitstr(const X509 *x)
-{
-    if (!x)
-        return NULL;
-    return x->cert_info.key->public_key;
-}
-
 int X509_check_private_key(X509 *x, EVP_PKEY *k)
 {
     EVP_PKEY *xk;
@@ -367,8 +312,8 @@ static int check_suite_b(EVP_PKEY *pkey, int sign_nid, unsigned long *pflags)
 {
     const EC_GROUP *grp = NULL;
     int curve_nid;
-    if (pkey && pkey->type == EVP_PKEY_EC)
-        grp = EC_KEY_get0_group(pkey->pkey.ec);
+    if (pkey && EVP_PKEY_id(pkey) == EVP_PKEY_EC)
+        grp = EC_KEY_get0_group(EVP_PKEY_get0_EC_KEY(pkey));
     if (!grp)
         return X509_V_ERR_SUITE_B_INVALID_ALGORITHM;
     curve_nid = EC_GROUP_get_curve_name(grp);
@@ -398,17 +343,29 @@ int X509_chain_check_suiteb(int *perror_depth, X509 *x, STACK_OF(X509) *chain,
                             unsigned long flags)
 {
     int rv, i, sign_nid;
-    EVP_PKEY *pk = NULL;
-    unsigned long tflags;
+    EVP_PKEY *pk;
+    unsigned long tflags = flags;
+
     if (!(flags & X509_V_FLAG_SUITEB_128_LOS))
         return X509_V_OK;
-    tflags = flags;
+
     /* If no EE certificate passed in must be first in chain */
     if (x == NULL) {
         x = sk_X509_value(chain, 0);
         i = 1;
     } else
         i = 0;
+
+    pk = X509_get0_pubkey(x);
+
+    /*
+     * With DANE-EE(3) success, or DANE-EE(3)/PKIX-EE(1) failure we don't build
+     * a chain all, just report trust success or failure, but must also report
+     * Suite-B errors if applicable.  This is indicated via a NULL chain
+     * pointer.  All we need to do is check the leaf key algorithm.
+     */
+    if (chain == NULL)
+        return check_suite_b(pk, -1, &tflags);
 
     if (X509_get_version(x) != 2) {
         rv = X509_V_ERR_SUITE_B_INVALID_VERSION;
@@ -417,7 +374,6 @@ int X509_chain_check_suiteb(int *perror_depth, X509 *x, STACK_OF(X509) *chain,
         goto end;
     }
 
-    pk = X509_get0_pubkey(x);
     /* Check EE key only */
     rv = check_suite_b(pk, -1, &tflags);
     if (rv != X509_V_OK) {
@@ -432,7 +388,7 @@ int X509_chain_check_suiteb(int *perror_depth, X509 *x, STACK_OF(X509) *chain,
             rv = X509_V_ERR_SUITE_B_INVALID_VERSION;
             goto end;
         }
-        pk = X509_get_pubkey(x);
+        pk = X509_get0_pubkey(x);
         rv = check_suite_b(pk, sign_nid, &tflags);
         if (rv != X509_V_OK)
             goto end;
@@ -448,7 +404,7 @@ int X509_chain_check_suiteb(int *perror_depth, X509 *x, STACK_OF(X509) *chain,
             i--;
         /*
          * If we have LOS error and flags changed then we are signing P-384
-         * with P-256. Use more meaninggul error.
+         * with P-256. Use more meaningful error.
          */
         if (rv == X509_V_ERR_SUITE_B_LOS_NOT_ALLOWED && flags != tflags)
             rv = X509_V_ERR_SUITE_B_CANNOT_SIGN_P_384_WITH_P_256;

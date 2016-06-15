@@ -1,67 +1,22 @@
 /*
- * Written by Richard Levitte <richard@levitte.org> for the OpenSSL project
- * 2000.
- */
-/* ====================================================================
- * Copyright (c) 2000 The OpenSSL Project.  All rights reserved.
+ * Copyright 2000-2016 The OpenSSL Project Authors. All Rights Reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- *
- * 1. Redistributions of source code must retain the above copyright
- *    notice, this list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright
- *    notice, this list of conditions and the following disclaimer in
- *    the documentation and/or other materials provided with the
- *    distribution.
- *
- * 3. All advertising materials mentioning features or use of this
- *    software must display the following acknowledgment:
- *    "This product includes software developed by the OpenSSL Project
- *    for use in the OpenSSL Toolkit. (http://www.OpenSSL.org/)"
- *
- * 4. The names "OpenSSL Toolkit" and "OpenSSL Project" must not be used to
- *    endorse or promote products derived from this software without
- *    prior written permission. For written permission, please contact
- *    licensing@OpenSSL.org.
- *
- * 5. Products derived from this software may not be called "OpenSSL"
- *    nor may "OpenSSL" appear in their names without prior written
- *    permission of the OpenSSL Project.
- *
- * 6. Redistributions of any form whatsoever must retain the following
- *    acknowledgment:
- *    "This product includes software developed by the OpenSSL Project
- *    for use in the OpenSSL Toolkit (http://www.OpenSSL.org/)"
- *
- * THIS SOFTWARE IS PROVIDED BY THE OpenSSL PROJECT ``AS IS'' AND ANY
- * EXPRESSED OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
- * PURPOSE ARE DISCLAIMED.  IN NO EVENT SHALL THE OpenSSL PROJECT OR
- * ITS CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT
- * NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
- * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
- * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,
- * STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED
- * OF THE POSSIBILITY OF SUCH DAMAGE.
- * ====================================================================
- *
- * This product includes cryptographic software written by Eric Young
- * (eay@cryptsoft.com).  This product includes software written by Tim
- * Hudson (tjh@cryptsoft.com).
- *
+ * Licensed under the OpenSSL license (the "License").  You may not use
+ * this file except in compliance with the License.  You can obtain a copy
+ * in the file LICENSE in the source distribution or at
+ * https://www.openssl.org/source/license.html
  */
 
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include "apps.h"
-#include <openssl/err.h>
-#ifndef OPENSSL_NO_ENGINE
+#include <openssl/opensslconf.h>
+#ifdef OPENSSL_NO_ENGINE
+NON_EMPTY_TRANSLATION_UNIT
+#else
+
+# include "apps.h"
+# include <stdio.h>
+# include <stdlib.h>
+# include <string.h>
+# include <openssl/err.h>
 # include <openssl/engine.h>
 # include <openssl/ssl.h>
 
@@ -72,13 +27,16 @@ typedef enum OPTION_choice {
 } OPTION_CHOICE;
 
 OPTIONS engine_options[] = {
+    {OPT_HELP_STR, 1, '-', "Usage: %s [options] engine...\n"},
+    {OPT_HELP_STR, 1, '-',
+        "  engine... Engines to load\n"},
     {"help", OPT_HELP, '-', "Display this summary"},
-    {"vvvv", OPT_VVVV, '-', "Also show internal input flags"},
-    {"vvv", OPT_VVV, '-', "Also add the input flags for each command"},
+    {"v", OPT_V, '-', "List 'control commands' For each specified engine"},
     {"vv", OPT_VV, '-', "Also display each command's description"},
-    {"v", OPT_V, '-', "For each engine, list its 'control commands'"},
-    {"c", OPT_C, '-', "List the capabilities of each engine"},
-    {"t", OPT_T, '-', "Check that each engine is available"},
+    {"vvv", OPT_VVV, '-', "Also add the input flags for each command"},
+    {"vvvv", OPT_VVVV, '-', "Also show internal input flags"},
+    {"c", OPT_C, '-', "List the capabilities of specified engine"},
+    {"t", OPT_T, '-', "Check that specified engine is available"},
     {"tt", OPT_TT, '-', "Display error trace for unavailable engines"},
     {"pre", OPT_PRE, 's', "Run command against the ENGINE before loading it"},
     {"post", OPT_POST, 's', "Run command against the ENGINE after loading it"},
@@ -89,24 +47,27 @@ OPTIONS engine_options[] = {
 
 static void identity(char *ptr)
 {
-    return;
 }
 
-static int append_buf(char **buf, const char *s, int *size, int step)
+static int append_buf(char **buf, int *size, const char *s)
 {
     if (*buf == NULL) {
-        *size = step;
+        *size = 256;
         *buf = app_malloc(*size, "engine buffer");
         **buf = '\0';
     }
 
     if (strlen(*buf) + strlen(s) >= (unsigned int)*size) {
-        *size += step;
-        *buf = OPENSSL_realloc(*buf, *size);
+        char *tmp;
+        *size += 256;
+        tmp = OPENSSL_realloc(*buf, *size);
+        if (tmp == NULL) {
+            OPENSSL_free(*buf);
+            *buf = NULL;
+            return 0;
+        }
+        *buf = tmp;
     }
-
-    if (*buf == NULL)
-        return 0;
 
     if (**buf != '\0')
         OPENSSL_strlcat(*buf, ", ", *size);
@@ -313,11 +274,23 @@ int engine_main(int argc, char **argv)
     const char *indent = "     ";
     OPTION_CHOICE o;
     char *prog;
+    char *argv1;
 
     out = dup_bio_out(FORMAT_TEXT);
-    prog = opt_init(argc, argv, engine_options);
-    if (!engines || !pre_cmds || !post_cmds)
+    if (engines == NULL || pre_cmds == NULL || post_cmds == NULL)
         goto end;
+
+    /* Remember the original command name, parse/skip any leading engine
+     * names, and then setup to parse the rest of the line as flags. */
+    prog = argv[0];
+    while ((argv1 = argv[1]) != NULL && *argv1 != '-') {
+        sk_OPENSSL_STRING_push(engines, argv1);
+        argc--;
+        argv++;
+    }
+    argv[0] = prog;
+    opt_init(argc, argv, engine_options);
+
     while ((o = opt_next()) != OPT_EOF) {
         switch (o) {
         case OPT_EOF:
@@ -353,10 +326,19 @@ int engine_main(int argc, char **argv)
             break;
         }
     }
+
+    /* Allow any trailing parameters as engine names. */
     argc = opt_num_rest();
     argv = opt_rest();
-    for ( ; *argv; argv++)
+    for ( ; *argv; argv++) {
+        if (**argv == '-') {
+            BIO_printf(bio_err, "%s: Cannot mix flags and engine names.\n",
+                       prog);
+            BIO_printf(bio_err, "%s: Use -help for summary.\n", prog);
+            goto end;
+        }
         sk_OPENSSL_STRING_push(engines, *argv);
+    }
 
     if (sk_OPENSSL_STRING_num(engines) == 0) {
         for (e = ENGINE_get_first(); e != NULL; e = ENGINE_get_next(e)) {
@@ -387,16 +369,16 @@ int engine_main(int argc, char **argv)
                 ENGINE_PKEY_METHS_PTR fn_pk;
 
                 if (ENGINE_get_RSA(e) != NULL
-                    && !append_buf(&cap_buf, "RSA", &cap_size, 256))
+                    && !append_buf(&cap_buf, &cap_size, "RSA"))
                     goto end;
                 if (ENGINE_get_DSA(e) != NULL
-                    && !append_buf(&cap_buf, "DSA", &cap_size, 256))
+                    && !append_buf(&cap_buf, &cap_size, "DSA"))
                     goto end;
                 if (ENGINE_get_DH(e) != NULL
-                    && !append_buf(&cap_buf, "DH", &cap_size, 256))
+                    && !append_buf(&cap_buf, &cap_size, "DH"))
                     goto end;
                 if (ENGINE_get_RAND(e) != NULL
-                    && !append_buf(&cap_buf, "RAND", &cap_size, 256))
+                    && !append_buf(&cap_buf, &cap_size, "RAND"))
                     goto end;
 
                 fn_c = ENGINE_get_ciphers(e);
@@ -404,8 +386,7 @@ int engine_main(int argc, char **argv)
                     goto skip_ciphers;
                 n = fn_c(e, NULL, &nids, 0);
                 for (k = 0; k < n; ++k)
-                    if (!append_buf(&cap_buf,
-                                    OBJ_nid2sn(nids[k]), &cap_size, 256))
+                    if (!append_buf(&cap_buf, &cap_size, OBJ_nid2sn(nids[k])))
                         goto end;
 
  skip_ciphers:
@@ -414,8 +395,7 @@ int engine_main(int argc, char **argv)
                     goto skip_digests;
                 n = fn_d(e, NULL, &nids, 0);
                 for (k = 0; k < n; ++k)
-                    if (!append_buf(&cap_buf,
-                                    OBJ_nid2sn(nids[k]), &cap_size, 256))
+                    if (!append_buf(&cap_buf, &cap_size, OBJ_nid2sn(nids[k])))
                         goto end;
 
  skip_digests:
@@ -424,8 +404,7 @@ int engine_main(int argc, char **argv)
                     goto skip_pmeths;
                 n = fn_pk(e, NULL, &nids, 0);
                 for (k = 0; k < n; ++k)
-                    if (!append_buf(&cap_buf,
-                                    OBJ_nid2sn(nids[k]), &cap_size, 256))
+                    if (!append_buf(&cap_buf, &cap_size, OBJ_nid2sn(nids[k])))
                         goto end;
  skip_pmeths:
                 if (cap_buf && (*cap_buf != '\0'))
@@ -463,10 +442,4 @@ int engine_main(int argc, char **argv)
     BIO_free_all(out);
     return (ret);
 }
-#else
-
-# if PEDANTIC
-static void *dummy = &dummy;
-# endif
-
 #endif
