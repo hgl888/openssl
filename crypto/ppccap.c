@@ -119,15 +119,39 @@ void poly1305_emit_fpu(void *ctx, unsigned char mac[16],
 int poly1305_init(void *ctx, const unsigned char key[16], void *func[2])
 {
     if (sizeof(size_t) == 4 && (OPENSSL_ppccap_P & PPC_FPU)) {
-        poly1305_init_fpu(ctx,key);
+        poly1305_init_fpu(ctx, key);
         func[0] = poly1305_blocks_fpu;
         func[1] = poly1305_emit_fpu;
     } else {
-        poly1305_init_int(ctx,key);
+        poly1305_init_int(ctx, key);
         func[0] = poly1305_blocks;
         func[1] = poly1305_emit;
     }
     return 1;
+}
+#endif
+
+#ifdef ECP_NISTZ256_ASM
+void ecp_nistz256_mul_mont(unsigned long res[4], const unsigned long a[4],
+                           const unsigned long b[4]);
+
+void ecp_nistz256_to_mont(unsigned long res[4], const unsigned long in[4]);
+void ecp_nistz256_to_mont(unsigned long res[4], const unsigned long in[4])
+{
+    static const unsigned long RR[] = { 0x0000000000000003U,
+                                        0xfffffffbffffffffU,
+                                        0xfffffffffffffffeU,
+                                        0x00000004fffffffdU };
+
+    ecp_nistz256_mul_mont(res, in, RR);
+}
+
+void ecp_nistz256_from_mont(unsigned long res[4], const unsigned long in[4]);
+void ecp_nistz256_from_mont(unsigned long res[4], const unsigned long in[4])
+{
+    static const unsigned long one[] = { 1, 0, 0, 0 };
+
+    ecp_nistz256_mul_mont(res, in, one);
 }
 #endif
 
