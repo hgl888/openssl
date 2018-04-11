@@ -1,5 +1,5 @@
 /*
- * Copyright 2001-2016 The OpenSSL Project Authors. All Rights Reserved.
+ * Copyright 2001-2018 The OpenSSL Project Authors. All Rights Reserved.
  *
  * Licensed under the OpenSSL license (the "License").  You may not use
  * this file except in compliance with the License.  You can obtain a copy
@@ -168,15 +168,28 @@ int OCSP_basic_add1_cert(OCSP_BASICRESP *resp, X509 *cert)
     return 1;
 }
 
-int OCSP_basic_sign(OCSP_BASICRESP *brsp,
-                    X509 *signer, EVP_PKEY *key, const EVP_MD *dgst,
+/*
+ * Sign an OCSP response using the parameters contained in the digest context,
+ * set the responderID to the subject name in the signer's certificate, and
+ * include one or more optional certificates in the response.
+ */
+
+int OCSP_basic_sign_ctx(OCSP_BASICRESP *brsp,
+                    X509 *signer, EVP_MD_CTX *ctx,
                     STACK_OF(X509) *certs, unsigned long flags)
 {
     int i;
     OCSP_RESPID *rid;
+    EVP_PKEY *pkey;
 
-    if (!X509_check_private_key(signer, key)) {
-        OCSPerr(OCSP_F_OCSP_BASIC_SIGN,
+    if (ctx == NULL || EVP_MD_CTX_pkey_ctx(ctx) == NULL) {
+        OCSPerr(OCSP_F_OCSP_BASIC_SIGN_CTX, OCSP_R_NO_SIGNER_KEY);
+        goto err;
+    }
+
+    pkey = EVP_PKEY_CTX_get0_pkey(EVP_MD_CTX_pkey_ctx(ctx));
+    if (pkey == NULL || !X509_check_private_key(signer, pkey)) {
+        OCSPerr(OCSP_F_OCSP_BASIC_SIGN_CTX,
                 OCSP_R_PRIVATE_KEY_DOES_NOT_MATCH_CERTIFICATE);
         goto err;
     }
@@ -193,17 +206,10 @@ int OCSP_basic_sign(OCSP_BASICRESP *brsp,
 
     rid = &brsp->tbsResponseData.responderId;
     if (flags & OCSP_RESPID_KEY) {
-        unsigned char md[SHA_DIGEST_LENGTH];
-        X509_pubkey_digest(signer, EVP_sha1(), md, NULL);
-        if ((rid->value.byKey = ASN1_OCTET_STRING_new()) == NULL)
+        if (!OCSP_RESPID_set_by_key(rid, signer))
             goto err;
-        if (!(ASN1_OCTET_STRING_set(rid->value.byKey, md, SHA_DIGEST_LENGTH)))
-            goto err;
-        rid->type = V_OCSP_RESPID_KEY;
-    } else {
-        if (!X509_NAME_set(&rid->value.byName, X509_get_subject_name(signer)))
-            goto err;
-        rid->type = V_OCSP_RESPID_NAME;
+    } else if (!OCSP_RESPID_set_by_name(rid, signer)) {
+        goto err;
     }
 
     if (!(flags & OCSP_NOTIME) &&
@@ -215,10 +221,87 @@ int OCSP_basic_sign(OCSP_BASICRESP *brsp,
      * -- Richard Levitte
      */
 
-    if (!OCSP_BASICRESP_sign(brsp, key, dgst, 0))
+    if (!OCSP_BASICRESP_sign_ctx(brsp, ctx, 0))
         goto err;
 
     return 1;
  err:
+    return 0;
+}
+
+int OCSP_basic_sign(OCSP_BASICRESP *brsp,
+                    X509 *signer, EVP_PKEY *key, const EVP_MD *dgst,
+                    STACK_OF(X509) *certs, unsigned long flags)
+{
+    EVP_MD_CTX *ctx = EVP_MD_CTX_new();
+    EVP_PKEY_CTX *pkctx = NULL;
+    int i;
+
+    if (!EVP_DigestSignInit(ctx, &pkctx, dgst, NULL, key)) {
+        EVP_MD_CTX_free(ctx);
+        return 0;
+    }
+    i = OCSP_basic_sign_ctx(brsp, signer, ctx, certs, flags);
+    EVP_MD_CTX_free(ctx);
+    return i;
+}
+
+int OCSP_RESPID_set_by_name(OCSP_RESPID *respid, X509 *cert)
+{
+    if (!X509_NAME_set(&respid->value.byName, X509_get_subject_name(cert)))
+        return 0;
+
+    respid->type = V_OCSP_RESPID_NAME;
+
+    return 1;
+}
+
+int OCSP_RESPID_set_by_key(OCSP_RESPID *respid, X509 *cert)
+{
+    ASN1_OCTET_STRING *byKey = NULL;
+    unsigned char md[SHA_DIGEST_LENGTH];
+
+    /* RFC2560 requires SHA1 */
+    if (!X509_pubkey_digest(cert, EVP_sha1(), md, NULL))
+        return 0;
+
+    byKey = ASN1_OCTET_STRING_new();
+    if (byKey == NULL)
+        return 0;
+
+    if (!(ASN1_OCTET_STRING_set(byKey, md, SHA_DIGEST_LENGTH))) {
+        ASN1_OCTET_STRING_free(byKey);
+        return 0;
+    }
+
+    respid->type = V_OCSP_RESPID_KEY;
+    respid->value.byKey = byKey;
+
+    return 1;
+}
+
+int OCSP_RESPID_match(OCSP_RESPID *respid, X509 *cert)
+{
+    if (respid->type == V_OCSP_RESPID_KEY) {
+        unsigned char md[SHA_DIGEST_LENGTH];
+
+        if (respid->value.byKey == NULL)
+            return 0;
+
+        /* RFC2560 requires SHA1 */
+        if (!X509_pubkey_digest(cert, EVP_sha1(), md, NULL))
+            return 0;
+
+        return (ASN1_STRING_length(respid->value.byKey) == SHA_DIGEST_LENGTH)
+            && (memcmp(ASN1_STRING_get0_data(respid->value.byKey), md,
+                       SHA_DIGEST_LENGTH) == 0);
+    } else if (respid->type == V_OCSP_RESPID_NAME) {
+        if (respid->value.byName == NULL)
+            return 0;
+
+        return X509_NAME_cmp(respid->value.byName,
+                             X509_get_subject_name(cert)) == 0;
+    }
+
     return 0;
 }

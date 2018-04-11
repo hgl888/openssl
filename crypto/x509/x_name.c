@@ -1,5 +1,5 @@
 /*
- * Copyright 1995-2016 The OpenSSL Project Authors. All Rights Reserved.
+ * Copyright 1995-2017 The OpenSSL Project Authors. All Rights Reserved.
  *
  * Licensed under the OpenSSL license (the "License").  You may not use
  * this file except in compliance with the License.  You can obtain a copy
@@ -8,7 +8,7 @@
  */
 
 #include <stdio.h>
-#include <ctype.h>
+#include "internal/ctype.h"
 #include "internal/cryptlib.h"
 #include <openssl/asn1t.h>
 #include <openssl/x509.h>
@@ -125,6 +125,16 @@ static void x509_name_ex_free(ASN1_VALUE **pval, const ASN1_ITEM *it)
     *pval = NULL;
 }
 
+static void local_sk_X509_NAME_ENTRY_free(STACK_OF(X509_NAME_ENTRY) *ne)
+{
+    sk_X509_NAME_ENTRY_free(ne);
+}
+
+static void local_sk_X509_NAME_ENTRY_pop_free(STACK_OF(X509_NAME_ENTRY) *ne)
+{
+    sk_X509_NAME_ENTRY_pop_free(ne, X509_NAME_ENTRY_free);
+}
+
 static int x509_name_ex_d2i(ASN1_VALUE **val,
                             const unsigned char **in, long len,
                             const ASN1_ITEM *it, int tag, int aclass,
@@ -173,37 +183,26 @@ static int x509_name_ex_d2i(ASN1_VALUE **val,
         for (j = 0; j < sk_X509_NAME_ENTRY_num(entries); j++) {
             entry = sk_X509_NAME_ENTRY_value(entries, j);
             entry->set = i;
-            if (!sk_X509_NAME_ENTRY_push(nm.x->entries, entry)) {
-                /*
-                 * Free all in entries if sk_X509_NAME_ENTRY_push return failure.
-                 * X509_NAME_ENTRY_free will check the null entry.
-                 */
-                sk_X509_NAME_ENTRY_pop_free(entries, X509_NAME_ENTRY_free);
+            if (!sk_X509_NAME_ENTRY_push(nm.x->entries, entry))
                 goto err;
-            }
-            /*
-             * If sk_X509_NAME_ENTRY_push return success, clean the entries[j].
-             * It's necessary when 'goto err;' happens.
-             */
             sk_X509_NAME_ENTRY_set(entries, j, NULL);
         }
-        sk_X509_NAME_ENTRY_free(entries);
-        sk_STACK_OF_X509_NAME_ENTRY_set(intname.s, i, NULL);
     }
-
-    sk_STACK_OF_X509_NAME_ENTRY_free(intname.s);
-    intname.s = NULL;
     ret = x509_name_canon(nm.x);
     if (!ret)
         goto err;
+    sk_STACK_OF_X509_NAME_ENTRY_pop_free(intname.s,
+                                         local_sk_X509_NAME_ENTRY_free);
     nm.x->modified = 0;
     *val = nm.a;
     *in = p;
     return ret;
 
  err:
-    X509_NAME_free(nm.x);
-    sk_STACK_OF_X509_NAME_ENTRY_pop_free(intname.s, sk_X509_NAME_ENTRY_free);
+    if (nm.x != NULL)
+        X509_NAME_free(nm.x);
+    sk_STACK_OF_X509_NAME_ENTRY_pop_free(intname.s,
+                                         local_sk_X509_NAME_ENTRY_pop_free);
     ASN1err(ASN1_F_X509_NAME_EX_D2I, ERR_R_NESTED_ASN1_ERROR);
     return 0;
 }
@@ -229,16 +228,6 @@ static int x509_name_ex_i2d(ASN1_VALUE **val, unsigned char **out,
     return ret;
 }
 
-static void local_sk_X509_NAME_ENTRY_free(STACK_OF(X509_NAME_ENTRY) *ne)
-{
-    sk_X509_NAME_ENTRY_free(ne);
-}
-
-static void local_sk_X509_NAME_ENTRY_pop_free(STACK_OF(X509_NAME_ENTRY) *ne)
-{
-    sk_X509_NAME_ENTRY_pop_free(ne, X509_NAME_ENTRY_free);
-}
-
 static int x509_name_encode(X509_NAME *a)
 {
     union {
@@ -261,8 +250,10 @@ static int x509_name_encode(X509_NAME *a)
             entries = sk_X509_NAME_ENTRY_new_null();
             if (!entries)
                 goto memerr;
-            if (!sk_STACK_OF_X509_NAME_ENTRY_push(intname.s, entries))
+            if (!sk_STACK_OF_X509_NAME_ENTRY_push(intname.s, entries)) {
+                sk_X509_NAME_ENTRY_free(entries);
                 goto memerr;
+            }
             set = entry->set;
         }
         if (!sk_X509_NAME_ENTRY_push(entries, entry))
@@ -330,8 +321,10 @@ static int x509_name_canon(X509_NAME *a)
             entries = sk_X509_NAME_ENTRY_new_null();
             if (!entries)
                 goto err;
-            if (!sk_STACK_OF_X509_NAME_ENTRY_push(intname, entries))
+            if (!sk_STACK_OF_X509_NAME_ENTRY_push(intname, entries)) {
+                sk_X509_NAME_ENTRY_free(entries);
                 goto err;
+            }
             set = entry->set;
         }
         tmpentry = X509_NAME_ENTRY_new();
@@ -405,11 +398,12 @@ static int asn1_string_canon(ASN1_STRING *out, const ASN1_STRING *in)
     /*
      * Convert string in place to canonical form. Ultimately we may need to
      * handle a wider range of characters but for now ignore anything with
-     * MSB set and rely on the isspace() and tolower() functions.
+     * MSB set and rely on the ossl_isspace() to fail on bad characters without
+     * needing isascii or range checks as well.
      */
 
     /* Ignore leading spaces */
-    while ((len > 0) && !(*from & 0x80) && isspace(*from)) {
+    while (len > 0 && ossl_isspace(*from)) {
         from++;
         len--;
     }
@@ -417,7 +411,7 @@ static int asn1_string_canon(ASN1_STRING *out, const ASN1_STRING *in)
     to = from + len;
 
     /* Ignore trailing spaces */
-    while ((len > 0) && !(to[-1] & 0x80) && isspace(to[-1])) {
+    while (len > 0 && ossl_isspace(to[-1])) {
         to--;
         len--;
     }
@@ -426,13 +420,13 @@ static int asn1_string_canon(ASN1_STRING *out, const ASN1_STRING *in)
 
     i = 0;
     while (i < len) {
-        /* If MSB set just copy across */
-        if (*from & 0x80) {
+        /* If not ASCII set just copy across */
+        if (!ossl_isascii(*from)) {
             *to++ = *from++;
             i++;
         }
         /* Collapse multiple spaces */
-        else if (isspace(*from)) {
+        else if (ossl_isspace(*from)) {
             /* Copy one space across */
             *to++ = ' ';
             /*
@@ -444,9 +438,9 @@ static int asn1_string_canon(ASN1_STRING *out, const ASN1_STRING *in)
                 from++;
                 i++;
             }
-            while (!(*from & 0x80) && isspace(*from));
+            while (ossl_isspace(*from));
         } else {
-            *to++ = tolower(*from);
+            *to++ = ossl_tolower(*from);
             from++;
             i++;
         }
@@ -479,19 +473,11 @@ static int i2d_name_canon(STACK_OF(STACK_OF_X509_NAME_ENTRY) * _intname,
 
 int X509_NAME_set(X509_NAME **xn, X509_NAME *name)
 {
-    X509_NAME *in;
-
-    if (!xn || !name)
-        return (0);
-
-    if (*xn != name) {
-        in = X509_NAME_dup(name);
-        if (in != NULL) {
-            X509_NAME_free(*xn);
-            *xn = in;
-        }
-    }
-    return (*xn != NULL);
+    if ((name = X509_NAME_dup(name)) == NULL)
+        return 0;
+    X509_NAME_free(*xn);
+    *xn = name;
+    return 1;
 }
 
 int X509_NAME_print(BIO *bp, const X509_NAME *name, int obase)
@@ -512,19 +498,10 @@ int X509_NAME_print(BIO *bp, const X509_NAME *name, int obase)
 
     c = s;
     for (;;) {
-#ifndef CHARSET_EBCDIC
         if (((*s == '/') &&
-             ((s[1] >= 'A') && (s[1] <= 'Z') && ((s[2] == '=') ||
-                                                 ((s[2] >= 'A')
-                                                  && (s[2] <= 'Z')
-                                                  && (s[3] == '='))
+             (ossl_isupper(s[1]) && ((s[2] == '=') ||
+                                (ossl_isupper(s[2]) && (s[3] == '='))
               ))) || (*s == '\0'))
-#else
-        if (((*s == '/') &&
-             (isupper(s[1]) && ((s[2] == '=') ||
-                                (isupper(s[2]) && (s[3] == '='))
-              ))) || (*s == '\0'))
-#endif
         {
             i = s - c;
             if (BIO_write(bp, c, i) != i)

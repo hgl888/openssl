@@ -171,6 +171,8 @@ static int eckey_pub_cmp(const EVP_PKEY *a, const EVP_PKEY *b)
     const EC_GROUP *group = EC_KEY_get0_group(b->pkey.ec);
     const EC_POINT *pa = EC_KEY_get0_public_key(a->pkey.ec),
         *pb = EC_KEY_get0_public_key(b->pkey.ec);
+    if (group == NULL || pa == NULL || pb == NULL)
+        return -2;
     r = EC_POINT_cmp(group, pa, pb, NULL);
     if (r == 0)
         return 1;
@@ -252,8 +254,10 @@ static int eckey_priv_encode(PKCS8_PRIV_KEY_INFO *p8, const EVP_PKEY *pkey)
     }
 
     if (!PKCS8_pkey_set0(p8, OBJ_nid2obj(NID_X9_62_id_ecPublicKey), 0,
-                         ptype, pval, ep, eplen))
+                         ptype, pval, ep, eplen)) {
+        OPENSSL_free(ep);
         return 0;
+    }
 
     return 1;
 }
@@ -294,23 +298,29 @@ static int ec_missing_parameters(const EVP_PKEY *pkey)
 static int ec_copy_parameters(EVP_PKEY *to, const EVP_PKEY *from)
 {
     EC_GROUP *group = EC_GROUP_dup(EC_KEY_get0_group(from->pkey.ec));
+
     if (group == NULL)
         return 0;
     if (to->pkey.ec == NULL) {
         to->pkey.ec = EC_KEY_new();
         if (to->pkey.ec == NULL)
-            return 0;
+            goto err;
     }
     if (EC_KEY_set_group(to->pkey.ec, group) == 0)
-        return 0;
+        goto err;
     EC_GROUP_free(group);
     return 1;
+ err:
+    EC_GROUP_free(group);
+    return 0;
 }
 
 static int ec_cmp_parameters(const EVP_PKEY *a, const EVP_PKEY *b)
 {
     const EC_GROUP *group_a = EC_KEY_get0_group(a->pkey.ec),
         *group_b = EC_KEY_get0_group(b->pkey.ec);
+    if (group_a == NULL || group_b == NULL)
+        return -2;
     if (EC_GROUP_cmp(group_a, group_b, NULL))
         return 0;
     else
@@ -341,7 +351,7 @@ static int do_EC_KEY_print(BIO *bp, const EC_KEY *x, int off, ec_print_t ktype)
         return 0;
     }
 
-    if (ktype != EC_KEY_PRINT_PARAM) {
+    if (ktype != EC_KEY_PRINT_PARAM && EC_KEY_get0_public_key(x) != NULL) {
         publen = EC_KEY_key2buf(x, EC_KEY_get_conv_form(x), &pub, NULL);
         if (publen == 0)
             goto err;
@@ -510,6 +520,48 @@ static int ec_pkey_ctrl(EVP_PKEY *pkey, int op, long arg1, void *arg2)
 
 }
 
+static int ec_pkey_check(const EVP_PKEY *pkey)
+{
+    EC_KEY *eckey = pkey->pkey.ec;
+
+    /* stay consistent to what EVP_PKEY_check demands */
+    if (eckey->priv_key == NULL) {
+        ECerr(EC_F_EC_PKEY_CHECK, EC_R_MISSING_PRIVATE_KEY);
+        return 0;
+    }
+
+    return EC_KEY_check_key(eckey);
+}
+
+static int ec_pkey_public_check(const EVP_PKEY *pkey)
+{
+    EC_KEY *eckey = pkey->pkey.ec;
+
+    /*
+     * Note: it unnecessary to check eckey->pub_key here since
+     * it will be checked in EC_KEY_check_key(). In fact, the
+     * EC_KEY_check_key() mainly checks the public key, and checks
+     * the private key optionally (only if there is one). So if
+     * someone passes a whole EC key (public + private), this
+     * will also work...
+     */
+
+    return EC_KEY_check_key(eckey);
+}
+
+static int ec_pkey_param_check(const EVP_PKEY *pkey)
+{
+    EC_KEY *eckey = pkey->pkey.ec;
+
+    /* stay consistent to what EVP_PKEY_check demands */
+    if (eckey->group == NULL) {
+        ECerr(EC_F_EC_PKEY_PARAM_CHECK, EC_R_MISSING_PARAMETERS);
+        return 0;
+    }
+
+    return EC_GROUP_check(eckey->group, NULL);
+}
+
 const EVP_PKEY_ASN1_METHOD eckey_asn1_meth = {
     EVP_PKEY_EC,
     EVP_PKEY_EC,
@@ -541,7 +593,13 @@ const EVP_PKEY_ASN1_METHOD eckey_asn1_meth = {
     int_ec_free,
     ec_pkey_ctrl,
     old_ec_priv_decode,
-    old_ec_priv_encode
+    old_ec_priv_encode,
+
+    0, 0, 0,
+
+    ec_pkey_check,
+    ec_pkey_public_check,
+    ec_pkey_param_check
 };
 
 int EC_KEY_print(BIO *bp, const EC_KEY *x, int off)

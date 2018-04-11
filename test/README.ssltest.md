@@ -38,7 +38,8 @@ The test section supports the following options
 * HandshakeMode - which handshake flavour to test:
   - Simple - plain handshake (default)
   - Resume - test resumption
-  - (Renegotiate - test renegotiation, not yet implemented)
+  - RenegotiateServer - test server initiated renegotiation
+  - RenegotiateClient - test client initiated renegotiation
 
 When HandshakeMode is Resume or Renegotiate, the original handshake is expected
 to succeed. All configured test expectations are verified against the second
@@ -80,11 +81,35 @@ handshake.
   - Yes - a session ticket is expected
   - No - a session ticket is not expected
 
+* SessionIdExpected - whether or not a session id is expected
+  - Ignore - do not check for a session id (default)
+  - Yes - a session id is expected
+  - No - a session id is not expected
+
 * ResumptionExpected - whether or not resumption is expected (Resume mode only)
   - Yes - resumed handshake
   - No - full handshake (default)
 
 * ExpectedNPNProtocol, ExpectedALPNProtocol - NPN and ALPN expectations.
+
+* ExpectedTmpKeyType - the expected algorithm or curve of server temp key
+
+* ExpectedServerCertType, ExpectedClientCertType - the expected algorithm or
+  curve of server or client certificate
+
+* ExpectedServerSignHash, ExpectedClientSignHash - the expected
+  signing hash used by server or client certificate
+
+* ExpectedServerSignType, ExpectedClientSignType - the expected
+  signature type used by server or client when signing messages
+
+* ExpectedClientCANames - for client auth list of CA names the server must
+  send. If this is "empty" the list is expected to be empty otherwise it
+  is a file of certificates whose subject names form the list.
+
+* ExpectedServerCANames - list of CA names the client must send, TLS 1.3 only.
+  If this is "empty" the list is expected to be empty otherwise it is a file
+  of certificates whose subject names form the list.
 
 ## Configuring the client and server
 
@@ -167,6 +192,9 @@ client => {
   protocols can be specified as a comma-separated list, and a callback with the
   recommended behaviour will be installed automatically.
 
+* SRPUser, SRPPassword - SRP settings. For client, this is the SRP user to
+  connect as; for server, this is a known SRP user.
+
 ### Default server and client configurations
 
 The default server certificate and CA files are added to the configurations
@@ -199,7 +227,7 @@ client => {
 ```
 $ ./config
 $ cd test
-$ TOP=.. perl -I testlib/ generate_ssl_tests.pl ssl-tests/my.conf.in \
+$ TOP=.. perl -I ../util/perl/ generate_ssl_tests.pl ssl-tests/my.conf.in \
   > ssl-tests/my.conf
 ```
 
@@ -208,7 +236,7 @@ where `my.conf.in` is your test input file.
 For example, to generate the test cases in `ssl-tests/01-simple.conf.in`, do
 
 ```
-$ TOP=.. perl -I testlib/ generate_ssl_tests.pl ssl-tests/01-simple.conf.in > ssl-tests/01-simple.conf
+$ TOP=.. perl -I ../util/perl/ generate_ssl_tests.pl ssl-tests/01-simple.conf.in > ssl-tests/01-simple.conf
 ```
 
 Alternatively (hackish but simple), you can comment out
@@ -245,19 +273,16 @@ environment variable to point to the location of the certs. E.g., from the root
 OpenSSL directory, do
 
 ```
-$ TEST_CERTS_DIR=test/certs test/ssl_test test/ssl-tests/01-simple.conf
+$ CTLOG_FILE=test/ct/log_list.conf TEST_CERTS_DIR=test/certs test/ssl_test \
+  test/ssl-tests/01-simple.conf
 ```
 
 or for shared builds
 
 ```
-$ TEST_CERTS_DIR=test/certs util/shlib_wrap.sh test/ssl_test \
-  test/ssl-tests/01-simple.conf
+$ CTLOG_FILE=test/ct/log_list.conf  TEST_CERTS_DIR=test/certs \
+  util/shlib_wrap.sh test/ssl_test test/ssl-tests/01-simple.conf
 ```
-
-Some tests also need additional environment variables; for example, Certificate
-Transparency tests need a `CTLOG_FILE`. See `test/recipes/80-test_ssl_new.t` for
-details.
 
 Note that the test expectations sometimes depend on the Configure settings. For
 example, the negotiated protocol depends on the set of available (enabled)

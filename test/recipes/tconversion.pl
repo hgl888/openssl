@@ -12,18 +12,18 @@ use warnings;
 
 use File::Compare qw/compare_text/;
 use File::Copy;
-use lib 'testlib';
 use OpenSSL::Test qw/:DEFAULT/;
 
 my %conversionforms = (
     # Default conversion forms.  Other series may be added with
     # specific test types as key.
     "*"		=> [ "d", "p" ],
+    "msb"	=> [ "d", "p", "msblob" ],
     );
 sub tconversion {
     my $testtype = shift;
     my $t = shift;
-    my @conversionforms = 
+    my @conversionforms =
 	defined($conversionforms{$testtype}) ?
 	@{$conversionforms{$testtype}} :
 	@{$conversionforms{"*"}};
