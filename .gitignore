@@ -182,3 +182,5 @@ pod2htmd.tmp
 # Windows manifest files
 *.manifest
 doc-nits
+.idea
+cmake-build-debug
