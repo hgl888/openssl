@@ -103,7 +103,7 @@ static int ssl3_record_app_data_waiting(SSL *s)
 
 int early_data_count_ok(SSL *s, size_t length, size_t overhead, int send)
 {
-    uint32_t max_early_data = s->max_early_data;
+    uint32_t max_early_data;
     SSL_SESSION *sess = s->session;
 
     /*
@@ -120,9 +120,14 @@ int early_data_count_ok(SSL *s, size_t length, size_t overhead, int send)
         }
         sess = s->psksession;
     }
-    if (!s->server
-            || (s->hit && sess->ext.max_early_data < s->max_early_data))
+
+    if (!s->server)
         max_early_data = sess->ext.max_early_data;
+    else if (s->ext.early_data != SSL_EARLY_DATA_ACCEPTED)
+        max_early_data = s->recv_max_early_data;
+    else
+        max_early_data = s->recv_max_early_data < sess->ext.max_early_data
+                         ? s->recv_max_early_data : sess->ext.max_early_data;
 
     if (max_early_data == 0) {
         SSLfatal(s, send ? SSL_AD_INTERNAL_ERROR : SSL_AD_UNEXPECTED_MESSAGE,
@@ -1882,6 +1887,7 @@ int dtls1_get_record(SSL *s)
         p += 6;
 
         n2s(p, rr->length);
+        rr->read = 0;
 
         /*
          * Lets check the version. We tolerate alerts that don't have the exact
@@ -1891,6 +1897,7 @@ int dtls1_get_record(SSL *s)
             if (version != s->version) {
                 /* unexpected version, silently discard */
                 rr->length = 0;
+                rr->read = 1;
                 RECORD_LAYER_reset_packet_length(&s->rlayer);
                 goto again;
             }
@@ -1899,6 +1906,7 @@ int dtls1_get_record(SSL *s)
         if ((version & 0xff00) != (s->version & 0xff00)) {
             /* wrong version, silently discard record */
             rr->length = 0;
+            rr->read = 1;
             RECORD_LAYER_reset_packet_length(&s->rlayer);
             goto again;
         }
@@ -1906,6 +1914,7 @@ int dtls1_get_record(SSL *s)
         if (rr->length > SSL3_RT_MAX_ENCRYPTED_LENGTH) {
             /* record too long, silently discard it */
             rr->length = 0;
+            rr->read = 1;
             RECORD_LAYER_reset_packet_length(&s->rlayer);
             goto again;
         }
@@ -1915,6 +1924,7 @@ int dtls1_get_record(SSL *s)
                 && rr->length > GET_MAX_FRAGMENT_LENGTH(s->session)) {
             /* record too long, silently discard it */
             rr->length = 0;
+            rr->read = 1;
             RECORD_LAYER_reset_packet_length(&s->rlayer);
             goto again;
         }
@@ -1936,6 +1946,7 @@ int dtls1_get_record(SSL *s)
                 return -1;
             }
             rr->length = 0;
+            rr->read = 1;
             RECORD_LAYER_reset_packet_length(&s->rlayer);
             goto again;
         }
@@ -1966,6 +1977,7 @@ int dtls1_get_record(SSL *s)
          */
         if (!dtls1_record_replay_check(s, bitmap)) {
             rr->length = 0;
+            rr->read = 1;
             RECORD_LAYER_reset_packet_length(&s->rlayer); /* dump this record */
             goto again;         /* get another record */
         }
@@ -1974,8 +1986,10 @@ int dtls1_get_record(SSL *s)
 #endif
 
     /* just read a 0 length packet */
-    if (rr->length == 0)
+    if (rr->length == 0) {
+        rr->read = 1;
         goto again;
+    }
 
     /*
      * If this record is from the next epoch (either HM or ALERT), and a
@@ -1992,6 +2006,7 @@ int dtls1_get_record(SSL *s)
             }
         }
         rr->length = 0;
+        rr->read = 1;
         RECORD_LAYER_reset_packet_length(&s->rlayer);
         goto again;
     }
@@ -2002,6 +2017,7 @@ int dtls1_get_record(SSL *s)
             return -1;
         }
         rr->length = 0;
+        rr->read = 1;
         RECORD_LAYER_reset_packet_length(&s->rlayer); /* dump this record */
         goto again;             /* get another record */
     }

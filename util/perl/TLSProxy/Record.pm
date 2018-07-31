@@ -36,7 +36,7 @@ my %record_type = (
 
 use constant {
     VERS_TLS_1_4 => 0x0305,
-    VERS_TLS_1_3_DRAFT => 0x7f1a,
+    VERS_TLS_1_3_DRAFT => 0x7f1c,
     VERS_TLS_1_3 => 0x0304,
     VERS_TLS_1_2 => 0x0303,
     VERS_TLS_1_1 => 0x0302,
@@ -67,17 +67,13 @@ sub get_records
 
     my $recnum = 1;
     while (length ($packet) > 0) {
-        print " Record $recnum";
-        if ($server) {
-            print " (server -> client)\n";
-        } else {
-            print " (client -> server)\n";
-        }
+        print " Record $recnum ", $server ? "(server -> client)\n"
+                                          : "(client -> server)\n";
 
         #Get the record header (unpack can't fail if $packet is too short)
         my ($content_type, $version, $len) = unpack('Cnn', $packet);
 
-        if (length($packet) < TLS_RECORD_HEADER_LENGTH + $len) {
+        if (length($packet) < TLS_RECORD_HEADER_LENGTH + ($len // 0)) {
             print "Partial data : ".length($packet)." bytes\n";
             $partial = $packet;
             last;
@@ -279,7 +275,8 @@ sub reconstruct_record
     my $server = shift;
     my $data;
 
-    if ($self->{sent}) {
+    #We only replay the records in the same direction
+    if ($self->{sent} || ($self->flight & 1) != $server) {
         return "";
     }
     $self->{sent} = 1;
@@ -387,5 +384,17 @@ sub outer_content_type
       $self->{outer_content_type} = shift;
     }
     return $self->{outer_content_type};
+}
+sub is_fatal_alert
+{
+    my $self = shift;
+    my $server = shift;
+
+    if (($self->{flight} & 1) == $server
+        && $self->{content_type} == TLSProxy::Record::RT_ALERT) {
+        my ($level, $alert) = unpack('CC', $self->decrypt_data);
+        return $alert if ($level == 2);
+    }
+    return 0;
 }
 1;
